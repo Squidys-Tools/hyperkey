@@ -1,0 +1,284 @@
+<ui:FluentWindow
+    x:Class="Hyperkey.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="Hyperkey"
+    Width="560"
+    Height="700"
+    MinWidth="460"
+    MinHeight="560"
+    ResizeMode="CanResize"
+    ExtendsContentIntoTitleBar="True"
+    WindowStartupLocation="CenterScreen"
+    UseLayoutRounding="True">
+    <Grid Background="{DynamicResource ApplicationBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar
+            x:Name="TitleBar"
+            Grid.Row="0"
+            Title=""
+            Background="{DynamicResource ApplicationBackgroundBrush}"
+            Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+            ButtonsBackground="{DynamicResource ApplicationBackgroundBrush}"
+            ButtonsForeground="{DynamicResource TextFillColorPrimaryBrush}"
+            ShowClose="True"
+            ShowMaximize="True"
+            ShowMinimize="True" />
+
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Auto"
+            HorizontalContentAlignment="Stretch">
+            <StackPanel
+                Margin="24,4,24,32"
+                HorizontalAlignment="Stretch">
+                <StackPanel Margin="0,0,0,24">
+                    <TextBlock
+                        FontSize="32"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                        Text="Hyperkey" />
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                        Text="One key becomes a new modifier layer." />
+                </StackPanel>
+
+                <ui:Card Padding="20" Margin="0,0,0,24">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,20,0">
+                            <TextBlock
+                                x:Name="StatusText"
+                                FontSize="20"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <TextBlock
+                                x:Name="StatusDescription"
+                                Margin="0,4,0,0"
+                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ui:ToggleSwitch
+                            x:Name="EnabledToggle"
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Click="EnabledToggle_Click" />
+                    </Grid>
+                </ui:Card>
+
+                <TextBlock
+                    Margin="0,0,0,12"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                    Text="Keyboard" />
+                <ui:Card Padding="16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                Text="Trigger key" />
+                            <ComboBox
+                                x:Name="TriggerKeySelector"
+                                Grid.Column="1"
+                                MinWidth="132"
+                                SelectionChanged="TriggerKeySelector_SelectionChanged" />
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                Text="Output modifiers" />
+                            <WrapPanel
+                                Grid.Column="1"
+                                HorizontalAlignment="Right">
+                                <CheckBox
+                                    x:Name="ControlModifierCheckBox"
+                                    Margin="0,0,10,0"
+                                    Content="Ctrl"
+                                    Click="OutputModifierCheckBox_Click" />
+                                <CheckBox
+                                    x:Name="AltModifierCheckBox"
+                                    Margin="0,0,10,0"
+                                    Content="Alt"
+                                    Click="OutputModifierCheckBox_Click" />
+                                <CheckBox
+                                    x:Name="ShiftModifierCheckBox"
+                                    Content="Shift"
+                                    Click="OutputModifierCheckBox_Click" />
+                            </WrapPanel>
+                        </Grid>
+                        <TextBlock
+                            x:Name="ModifierSelectionHintText"
+                            Margin="0,10,0,0"
+                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                            Text="Choose one or more modifiers."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:Card>
+
+                <TextBlock
+                    Margin="0,0,0,12"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                    Text="Startup" />
+                <ui:Card Padding="16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
+                                <TextBlock
+                                    FontWeight="SemiBold"
+                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                    Text="Launch at login" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    Text="Start Hyperkey in the background when you sign in."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ui:ToggleSwitch
+                                x:Name="LaunchToggle"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="LaunchToggle_Click" />
+                        </Grid>
+                        <Grid Margin="0,16,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
+                                <TextBlock
+                                    FontWeight="SemiBold"
+                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                    Text="Launch to tray" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    Text="Keep the settings window closed when Hyperkey starts."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ui:ToggleSwitch
+                                x:Name="LaunchToTrayToggle"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="LaunchToTrayToggle_Click" />
+                        </Grid>
+                    </StackPanel>
+                </ui:Card>
+
+                <Border
+                    x:Name="RecoveryBanner"
+                    Margin="0,0,0,24"
+                    Padding="14"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Visibility="Collapsed">
+                    <TextBlock
+                        x:Name="RecoveryText"
+                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                        TextWrapping="Wrap" />
+                </Border>
+
+                <TextBlock
+                    Margin="0,0,0,12"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                    Text="Diagnostics" />
+                <ui:Card Padding="16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                Text="Keyboard hook" />
+                            <TextBlock
+                                x:Name="DiagnosticStatusText"
+                                Grid.Column="1"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </Grid>
+                        <TextBlock
+                            x:Name="DiagnosticMessageText"
+                            Margin="0,10,0,0"
+                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Visibility="Collapsed" />
+                        <TextBlock
+                            x:Name="DiagnosticCopyStatusText"
+                            Margin="0,10,0,0"
+                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Visibility="Collapsed" />
+                        <TextBlock
+                            Margin="0,10,0,0"
+                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                            Text="Elevated applications are unsupported in this MVP. Other keyboard remappers may also interfere."
+                            TextWrapping="Wrap" />
+                        <StackPanel Margin="0,14,0,0" Orientation="Horizontal">
+                            <ui:Button
+                                Padding="14,7"
+                                Click="RestartHook_Click"
+                                Content="Restart hook" />
+                            <ui:Button
+                                Margin="8,0,0,0"
+                                Padding="14,7"
+                                Click="EmergencyDisable_Click"
+                                Content="Emergency disable" />
+                            <ui:Button
+                                Margin="8,0,0,0"
+                                Padding="14,7"
+                                Click="CopyDiagnostics_Click"
+                                Content="Copy details" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <TextBlock
+                    Margin="0,0,0,12"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                    Text="About" />
+                <StackPanel>
+                    <TextBlock
+                        x:Name="VersionText"
+                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                        Text="Version" />
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                        Text="The keyboard hook runs only while Hyperkey is enabled."
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</ui:FluentWindow>
