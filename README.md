@@ -24,7 +24,13 @@ This project is called Hyperkey. It's a Windows native port of the popular Mac a
 
 The installer definition and packaging script are in place, but installer validation, code signing, and final publishing polish remain open work. Uninstall cleanup removes the application-data directory. Elevated applications are unsupported in the MVP, and the final application icon is deferred.
 
-The MVP still has the Windows input limits described in `DESIGN-IMPLEMENTATION-PLAN.md`: secure desktop screens are out of scope, elevated applications are unsupported, and other remappers or low-level game input can interfere.
+The MVP still has the Windows input limits described in `docs/DESIGN.md`: secure desktop screens are out of scope, elevated applications are unsupported, and other remappers or low-level game input can interfere.
+
+## Documentation
+
+- [Design & Implementation Plan](docs/DESIGN.md) - MVP scope, architecture, and implementation phases
+- [Installer Guide](docs/INSTALLER.md) - Building and packaging the Windows installer
+- [Changelog & Roadmap](docs/CHANGELOG.md) - Project phases and current status
 
 ## Build
 
