@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -88,8 +89,10 @@ public sealed class TrayIconService : IDisposable
 
     private static ImageSource CreateApplicationIcon()
     {
+        var exePath = Assembly.GetExecutingAssembly().Location;
+        using var icon = Icon.ExtractAssociatedIcon(exePath)!;
         var source = Imaging.CreateBitmapSourceFromHIcon(
-            SystemIcons.Application.Handle,
+            icon.Handle,
             Int32Rect.Empty,
             BitmapSizeOptions.FromEmptyOptions());
         source.Freeze();

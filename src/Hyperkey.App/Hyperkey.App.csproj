@@ -7,9 +7,14 @@
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\favicon.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Hyperkey.Core\Hyperkey.Core.csproj" />
