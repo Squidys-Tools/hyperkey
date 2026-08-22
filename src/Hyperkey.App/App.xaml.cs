@@ -87,14 +87,9 @@ public partial class App : Application
             _diagnosticMessage = _inputEngine.StatusError ?? "The keyboard hook could not be started.";
         }
 
-        var settingsWindow = EnsureSettingsWindow();
-        if (_settings.LaunchToTray)
+        if (!_settings.LaunchToTray)
         {
-            settingsWindow.PrepareForTray();
-        }
-        else
-        {
-            settingsWindow.ShowSettings();
+            EnsureSettingsWindow().ShowSettings();
         }
 
         _trayIcon = new TrayIconService(

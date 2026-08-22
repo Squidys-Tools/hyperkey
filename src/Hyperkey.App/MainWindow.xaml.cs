@@ -47,23 +47,6 @@ public partial class MainWindow : FluentWindow
         Activate();
     }
 
-    public void PrepareForTray()
-    {
-        var originalShowInTaskbar = ShowInTaskbar;
-        var originalOpacity = Opacity;
-        var originalShowActivated = ShowActivated;
-
-        ShowInTaskbar = false;
-        Opacity = 0;
-        ShowActivated = false;
-        Show();
-        Hide();
-
-        ShowInTaskbar = originalShowInTaskbar;
-        Opacity = originalOpacity;
-        ShowActivated = originalShowActivated;
-    }
-
     public void CloseForExit()
     {
         _allowClose = true;
