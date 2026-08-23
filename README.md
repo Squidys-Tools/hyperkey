@@ -1,61 +1,58 @@
 # Hyperkey for Windows
 
-This project is called Hyperkey. It's a Windows native port of the popular Mac app that turns a selected trigger key into a configurable modifier layer.
+Hyperkey turns a key you rarely use into a new modifier layer, like Ctrl or Alt but entirely your own. It's a Windows port of the Mac app [Hyperkey](https://hyperkey.app/).
 
-## Implemented
+## How it works
 
-- WPF desktop project with WPF UI styling, targeting Windows 10 19041 or newer.
-- Separate `Hyperkey.Core` settings model with typed enums and validated JSON parsing.
-- Atomic settings writes under `%LOCALAPPDATA%\Hyperkey\settings.json`.
-- Safe defaults and an in-app recovery message when settings cannot be loaded.
-- Single-instance process guard.
-- WPF UI tray icon and menu with enable/disable, settings, and quit actions.
-- Scrollable settings window with light/dark theme resources, enabled state, configurable trigger and output modifiers, startup preference, and version information.
-- Startup controls for launch at login and whether the settings window opens or stays in the tray.
-- Pure configurable trigger state machine with suppression, activation, forwarding, and release decisions.
-- Dedicated low-level keyboard hook thread with a Windows message loop.
-- Scan-code-based output-modifier synthesis tagged so generated events are ignored by the hook.
-- A trigger-key tap is replayed as normal input; holding it activates the modifier layer.
-- Emergency disable and cleanup that reset the state machine and release generated modifiers.
-- Hook status is reflected in the settings window when installation or synthesis fails.
-- Sleep/resume and workstation lock/unlock recovery with a diagnostics section and hook restart controls.
-- Shared version metadata used by the app and packaging workflow.
-- Push-to-`main` CI that builds the solution and runs the core checks.
+Pick a trigger key (Caps Lock or Scroll Lock) and a set of modifiers (Ctrl, Alt, Shift, any combination).
 
-The installer definition and packaging script are in place, but installer validation, code signing, and final publishing polish remain open work. Uninstall cleanup removes the application-data directory. Elevated applications are unsupported in the MVP, and the final application icon is deferred.
+Hold the trigger key and every other key you press acts as if those modifiers were held too. For example, with Caps Lock as the trigger and Ctrl+Alt+Shift as the output:
 
-The MVP still has the Windows input limits described in `docs/DESIGN.md`: secure desktop screens are out of scope, elevated applications are unsupported, and other remappers or low-level game input can interfere.
+- Hold Caps Lock, press F, and Windows sees Ctrl+Alt+Shift+F.
+- Tap Caps Lock on its own and it still toggles caps like normal.
 
-## Documentation
+Your real Ctrl, Alt, and Shift keys keep working exactly as before. Hyperkey adds a layer on top instead of replacing anything.
 
-- [Design & Implementation Plan](docs/DESIGN.md) - MVP scope, architecture, and implementation phases
-- [Installer Guide](docs/INSTALLER.md) - Building and packaging the Windows installer
-- [Changelog & Roadmap](docs/CHANGELOG.md) - Project phases and current status
+## Install
 
-## Build
+1. Download `Hyperkey-Setup-x64.exe` from the [releases page](https://github.com/Squidys-Tools/hyperkey/releases).
+2. Run it. The installer is per-user and needs no administrator access.
+3. Hyperkey starts in the system tray. Click the tray icon to open settings.
 
-Open `Hyperkey.sln` in Visual Studio with the .NET desktop development workload installed, or run `dotnet build Hyperkey.sln`.
+The installer isn't code-signed yet, so Windows may show a SmartScreen warning on first run. Choose "More info" and "Run anyway" to continue.
 
-Run the dependency-free core checks with:
+Requires Windows 10 version 19041 or newer.
 
-```powershell
-dotnet run --project tests\Hyperkey.Core.Tests\Hyperkey.Core.Tests.csproj
-```
+## Using Hyperkey
 
-To package a self-contained x64 installer after Inno Setup 6 is installed:
+Settings live in one window, opened from the tray icon:
 
-```powershell
-.\scripts\package-installer.ps1
-```
+- **Enabled** turns the whole thing on or off without quitting.
+- **Trigger key** picks between Caps Lock and Scroll Lock.
+- **Output modifiers** picks which of Ctrl, Alt, or Shift the layer sends. Pick at least one.
+- **Launch at login** starts Hyperkey when you sign in. **Launch to tray** keeps the settings window closed at startup.
 
-This writes the published app to `publish\win-x64` and the installer to `publish\installer`.
+Settings are saved under `%LOCALAPPDATA%\Hyperkey\settings.json` and survive restarts.
 
-The shared application version is defined in `Directory.Build.props`.
+## If something goes wrong
 
-## Install and uninstall
+Open settings and scroll to **Diagnostics**:
 
-The installer is per-user and installs Hyperkey under `%LOCALAPPDATA%\Programs\Hyperkey`, so it does not require administrator access. It creates a Start Menu shortcut and closes Hyperkey during upgrades or removal when possible.
+- **Restart hook** re-installs the keyboard listener if it stopped working, for example after some sleep/resume cycles.
+- **Emergency disable** turns everything off and releases any modifiers Hyperkey was holding. Use this if keys ever seem stuck.
+- **Copy details** copies diagnostic text for a bug report.
 
-Uninstall removes the installed files, the Start Menu shortcut, Hyperkey's launch-at-login registry value, and the entire `%LOCALAPPDATA%\Hyperkey` application-data directory. Settings are not retained after uninstall.
+Some things Hyperkey can't do, by design of how Windows input works:
 
-Elevated applications are unsupported in this MVP. Hyperkey is intended to operate with ordinary non-elevated applications.
+- Administrator-running applications ignore Hyperkey's generated keys.
+- The Windows login screen and other secure desktops are out of scope.
+- Some games read the keyboard through lower-level paths and may not see the extra modifiers.
+- Other remapping tools (PowerToys Keyboard Manager, for example) can fight over the same keys. Pick one tool per job.
+
+## Uninstall
+
+Uninstall Hyperkey from Windows Settings, "Apps", "Installed apps". This removes the app files, the Start Menu shortcut, its launch-at-login entry, and the settings folder. Your settings are not kept after uninstall.
+
+## Development
+
+Hyperkey is free and open source. If you want to build it yourself or help out, see [CONTRIBUTING.md](CONTRIBUTING.md).
