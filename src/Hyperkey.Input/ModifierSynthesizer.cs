@@ -49,7 +49,7 @@ public sealed class ModifierSynthesizer
                 .Where(modifier => _pressedModifiers.Contains(modifier))
                 .ToImmutableArray();
             var sendOrder = logicalModifiers.Reverse().ToImmutableArray();
-            var inputs = CreateInputs(sendOrder, isKeyUp: false);
+            var inputs = CreateInputs(sendOrder, isKeyUp: true);
             var sent = Send(inputs);
             RemoveSentReleases(sendOrder, sent);
 
@@ -132,7 +132,7 @@ public sealed class ModifierSynthesizer
             .Where(modifier => _pressedModifiers.Contains(modifier))
             .ToImmutableArray();
         var sendOrder = logicalModifiers.Reverse().ToImmutableArray();
-        var inputs = CreateInputs(sendOrder, isKeyUp: false);
+        var inputs = CreateInputs(sendOrder, isKeyUp: true);
         if (inputs.Length > 0)
         {
             Send(inputs);
