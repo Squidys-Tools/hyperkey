@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Hyperkey.Core;
 using Hyperkey.Input;
 using FluentWindow = Wpf.Ui.Controls.FluentWindow;
@@ -11,12 +12,6 @@ namespace Hyperkey.App;
 
 public partial class MainWindow : FluentWindow
 {
-    private static readonly IReadOnlyList<TriggerOption> TriggerOptions =
-    [
-        new(TriggerKey.CapsLock, "Caps Lock"),
-        new(TriggerKey.ScrollLock, "Scroll Lock")
-    ];
-
     private bool _isApplyingSettings;
     private bool _allowClose;
 
@@ -24,8 +19,6 @@ public partial class MainWindow : FluentWindow
     {
         InitializeComponent();
         VersionText.Text = $"Version {AppVersion.Display}";
-        TriggerKeySelector.ItemsSource = TriggerOptions;
-        TriggerKeySelector.DisplayMemberPath = nameof(TriggerOption.Label);
 
         Closing += MainWindow_Closing;
         App.CurrentApp.SettingsChanged += OnSettingsChanged;
@@ -64,13 +57,16 @@ public partial class MainWindow : FluentWindow
             EnabledToggle.IsChecked = settings.Enabled;
             LaunchToggle.IsChecked = settings.LaunchAtStartup;
             LaunchToTrayToggle.IsChecked = settings.LaunchToTray;
-            TriggerKeySelector.SelectedItem = TriggerOptions.Single(option => option.Key == settings.Trigger);
+            CapsLockTriggerButton.IsChecked = settings.Trigger == TriggerKey.CapsLock;
+            ScrollLockTriggerButton.IsChecked = settings.Trigger == TriggerKey.ScrollLock;
             ControlModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Control);
             AltModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Alt);
             ShiftModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Shift);
 
-            StatusText.Text = settings.Enabled ? "Hyperkey is on" : "Hyperkey is off";
+            StatusText.Text = GetStatusSummary(settings);
             StatusDescription.Text = GetStatusDescription(settings);
+            UpdateEnabledBadge(settings.Enabled);
+            UpdateStatusChip(App.CurrentApp.InputStatus);
 
             ModifierSelectionHintText.Visibility = Visibility.Visible;
 
@@ -119,11 +115,26 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void TriggerKeySelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void TriggerOption_Checked(object sender, RoutedEventArgs e)
     {
-        if (!_isApplyingSettings && TriggerKeySelector.SelectedItem is TriggerOption option)
+        if (_isApplyingSettings)
         {
-            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(option.Key));
+            return;
+        }
+
+        TriggerKey? trigger = null;
+        if (sender == CapsLockTriggerButton)
+        {
+            trigger = TriggerKey.CapsLock;
+        }
+        else if (sender == ScrollLockTriggerButton)
+        {
+            trigger = TriggerKey.ScrollLock;
+        }
+
+        if (trigger.HasValue)
+        {
+            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(trigger.Value));
         }
     }
 
@@ -252,6 +263,12 @@ public partial class MainWindow : FluentWindow
         _ => throw new ArgumentOutOfRangeException(nameof(trigger))
     };
 
+    private static string GetStatusSummary(HyperkeySettings settings)
+    {
+        var modifiers = string.Join(" ", settings.OutputModifiers.Select(GetModifierLabel));
+        return $"{GetTriggerLabel(settings.Trigger)} + {modifiers}";
+    }
+
     private static string GetStatusDescription(HyperkeySettings settings)
     {
         if (!settings.Enabled)
@@ -269,6 +286,66 @@ public partial class MainWindow : FluentWindow
         };
     }
 
+    private void UpdateEnabledBadge(bool enabled)
+    {
+        EnabledStateText.Text = enabled ? "On" : "Off";
+
+        // Theme-aware brushes; resolved per call so light/dark/high-contrast all work.
+        // Text always carries the state, so color is never the only signal.
+        if (enabled)
+        {
+            EnabledBadge.Background = (Brush)FindResource("SystemFillColorSuccessBackgroundBrush");
+            EnabledBadge.BorderBrush = (Brush)FindResource("SystemFillColorSuccessBrush");
+            EnabledDot.Fill = (Brush)FindResource("SystemFillColorSuccessBrush");
+        }
+        else
+        {
+            EnabledBadge.Background = (Brush)FindResource("ControlFillColorSecondaryBrush");
+            EnabledBadge.BorderBrush = (Brush)FindResource("ControlStrokeColorDefaultBrush");
+            EnabledDot.Fill = (Brush)FindResource("TextFillColorTertiaryBrush");
+        }
+    }
+
+    private void UpdateStatusChip(InputEngineStatus status)
+    {
+        var label = GetInputStatusLabel(status);
+        StatusChipText.Text = label.ToUpperInvariant();
+        StatusHookText.Text = $"Hook status: {label}";
+        DiagnosticStatusText.Text = label;
+
+        Brush background;
+        Brush border;
+        Brush dot;
+        switch (status)
+        {
+            case InputEngineStatus.Running:
+                background = (Brush)FindResource("SystemFillColorSuccessBackgroundBrush");
+                border = (Brush)FindResource("SystemFillColorSuccessBrush");
+                dot = (Brush)FindResource("SystemFillColorSuccessBrush");
+                break;
+            case InputEngineStatus.Starting:
+            case InputEngineStatus.Stopping:
+                background = (Brush)FindResource("SystemFillColorCautionBackgroundBrush");
+                border = (Brush)FindResource("SystemFillColorCautionBrush");
+                dot = (Brush)FindResource("SystemFillColorCautionBrush");
+                break;
+            case InputEngineStatus.Failed:
+                background = (Brush)FindResource("SystemFillColorCriticalBackgroundBrush");
+                border = (Brush)FindResource("SystemFillColorCriticalBrush");
+                dot = (Brush)FindResource("SystemFillColorCriticalBrush");
+                break;
+            default:
+                background = (Brush)FindResource("ControlFillColorSecondaryBrush");
+                border = (Brush)FindResource("ControlStrokeColorDefaultBrush");
+                dot = (Brush)FindResource("TextFillColorTertiaryBrush");
+                break;
+        }
+
+        StatusChip.Background = background;
+        StatusChip.BorderBrush = border;
+        StatusDot.Fill = dot;
+    }
+
     private static string GetInputStatusLabel(InputEngineStatus status) => status switch
     {
         InputEngineStatus.Starting => "Starting",
@@ -277,6 +354,4 @@ public partial class MainWindow : FluentWindow
         InputEngineStatus.Failed => "Needs attention",
         _ => "Stopped"
     };
-
-    private sealed record TriggerOption(TriggerKey Key, string Label);
 }

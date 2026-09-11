@@ -1,0 +1,271 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!--
+        Hyperkey shared design tokens.
+        Brushes intentionally alias WPF-UI theme resources via DynamicResource
+        at the usage site so light, dark, and high-contrast themes keep working.
+        This dictionary only owns theme-independent tokens: spacing, radii, type.
+    -->
+
+    <!-- Spacing -->
+    <Thickness x:Key="Hyperkey.ContentMargin">24,4,24,24</Thickness>
+    <Thickness x:Key="Hyperkey.SectionLabelMargin">0,0,0,8</Thickness>
+    <sys:Double x:Key="Hyperkey.Space.Xs">4</sys:Double>
+    <sys:Double x:Key="Hyperkey.Space.Sm">8</sys:Double>
+    <sys:Double x:Key="Hyperkey.Space.Md">12</sys:Double>
+    <sys:Double x:Key="Hyperkey.Space.Lg">16</sys:Double>
+    <sys:Double x:Key="Hyperkey.Space.Xl">20</sys:Double>
+    <sys:Double x:Key="Hyperkey.Space.Content">24</sys:Double>
+
+    <!-- Corner radii (increased ~20% from 12/8/6 baseline per approved mock) -->
+    <CornerRadius x:Key="Hyperkey.Radius.Status">14</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Segmented">10</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.SegmentedItem">7</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Keycap">10</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Chip">7</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Button">7</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Banner">10</CornerRadius>
+
+    <!-- Typography scale -->
+    <sys:Double x:Key="Hyperkey.Font.Title">28</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.StatusTitle">18</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.Body">13</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.SectionLabel">11</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.Caption">12</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.KeycapTitle">14</sys:Double>
+    <sys:Double x:Key="Hyperkey.Font.KeycapState">10</sys:Double>
+
+    <!-- Text styles -->
+    <Style x:Key="Hyperkey.TitleText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.Title}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <Style x:Key="Hyperkey.SubtitleText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.Body}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Hyperkey.SectionHeading" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.SectionLabel}" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="Margin" Value="{StaticResource Hyperkey.SectionLabelMargin}" />
+    </Style>
+
+    <Style x:Key="Hyperkey.StatusTitleText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.StatusTitle}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Hyperkey.BodyText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.Body}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Hyperkey.CaptionText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.Caption}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- Primary status panel: one strong surface, no nested cards -->
+    <Style x:Key="Hyperkey.StatusPanel" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource Hyperkey.Radius.Status}" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,16,0,0" />
+    </Style>
+
+    <!-- Status chip: neutral surface, text carries meaning (Running/Stopped/Failed) -->
+    <Style x:Key="Hyperkey.StatusChip" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource SystemFillColorSuccessBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource Hyperkey.Radius.Chip}" />
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="Hyperkey.StatusChipText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+    </Style>
+
+    <!-- Enabled badge in header: visual mirror of EnabledToggle, not interactive -->
+    <Style x:Key="Hyperkey.EnabledBadge" TargetType="Border">
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="12,6,12,6" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Focusable" Value="False" />
+    </Style>
+
+    <!-- Segmented trigger selector -->
+    <Style x:Key="Hyperkey.SegmentedContainer" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource Hyperkey.Radius.Segmented}" />
+        <Setter Property="Padding" Value="3" />
+    </Style>
+
+    <Style x:Key="Hyperkey.SegmentedOption" TargetType="RadioButton">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.Body}" />
+        <Setter Property="Padding" Value="0,9" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border
+                        x:Name="Root"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="Transparent"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{StaticResource Hyperkey.Radius.SegmentedItem}"
+                        Padding="{TemplateBinding Padding}">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock
+                                x:Name="CheckGlyph"
+                                Margin="0,0,4,0"
+                                FontWeight="SemiBold"
+                                Text="✓"
+                                Visibility="Collapsed" />
+                            <ContentPresenter
+                                RecognizesAccessKey="True"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Background" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                            <Setter Property="TextElement.Foreground" TargetName="Root" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="False">
+                            <Setter Property="TextElement.Foreground" TargetName="Root" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <Setter Property="FontWeight" Value="Normal" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource ControlStrokeColorSecondaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Opacity" TargetName="Root" Value="0.85" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                            <Setter Property="BorderThickness" TargetName="Root" Value="2" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" TargetName="Root" Value="0.55" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Keycap modifier selector: CheckBox with keycap affordance.
+         Selected state uses fill + bold + ✓ + SELECTED/OFF text, never color alone. -->
+    <Style x:Key="Hyperkey.KeycapToggle" TargetType="CheckBox">
+        <Setter Property="FontSize" Value="{StaticResource Hyperkey.Font.KeycapTitle}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Border
+                        x:Name="Root"
+                        MinHeight="52"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1,1,1,3"
+                        CornerRadius="{StaticResource Hyperkey.Radius.Keycap}"
+                        Padding="8,8">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock
+                                    x:Name="CheckGlyph"
+                                    Margin="0,0,4,0"
+                                    FontWeight="SemiBold"
+                                    Text="✓"
+                                    Visibility="Collapsed" />
+                                <ContentPresenter
+                                    RecognizesAccessKey="True"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center" />
+                            </StackPanel>
+                            <TextBlock
+                                x:Name="StateLabel"
+                                Margin="0,2,0,0"
+                                HorizontalAlignment="Center"
+                                FontSize="{StaticResource Hyperkey.Font.KeycapState}"
+                                Text="OFF" />
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Background" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                            <Setter Property="TextElement.Foreground" TargetName="Root" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="StateLabel" Property="Text" Value="SELECTED" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="False">
+                            <Setter Property="TextElement.Foreground" TargetName="Root" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <Setter Property="FontWeight" Value="Normal" />
+                            <Setter TargetName="StateLabel" Property="Text" Value="OFF" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Opacity" TargetName="Root" Value="0.88" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter Property="BorderBrush" TargetName="Root" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" TargetName="Root" Value="0.55" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Secondary sections: dividers + whitespace, not cards -->
+    <Style x:Key="Hyperkey.SectionDivider" TargetType="Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource DividerStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Margin" Value="0,20,0,0" />
+        <Setter Property="Padding" Value="0,16,0,0" />
+    </Style>
+
+    <!-- Diagnostic actions: destructive action distinguished inline via
+         SystemFillColorCriticalBrush so high-contrast themes keep working. -->
+
+</ResourceDictionary>
