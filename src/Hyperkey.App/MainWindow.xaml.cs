@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Hyperkey.Core;
 using Hyperkey.Input;
 using FluentWindow = Wpf.Ui.Controls.FluentWindow;
@@ -65,9 +64,7 @@ public partial class MainWindow : FluentWindow
             AltModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Alt);
             ShiftModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Shift);
 
-            StatusText.Text = GetStatusSummary(settings);
-            StatusDescription.Text = GetStatusDescription(settings);
-            UpdateStatusChip(App.CurrentApp.InputStatus);
+            UpdateDiagnosticStatus(App.CurrentApp.InputStatus);
 
             ModifierSelectionHintText.Visibility = Visibility.Visible;
 
@@ -289,14 +286,6 @@ public partial class MainWindow : FluentWindow
         return selected.ToImmutable();
     }
 
-    private static string GetModifierLabel(OutputModifier modifier) => modifier switch
-    {
-        OutputModifier.Control => "Ctrl",
-        OutputModifier.Alt => "Alt",
-        OutputModifier.Shift => "Shift",
-        _ => throw new ArgumentOutOfRangeException(nameof(modifier))
-    };
-
     private static string GetTriggerLabel(TriggerKey trigger) => trigger switch
     {
         TriggerKey.CapsLock => "Caps Lock",
@@ -304,67 +293,9 @@ public partial class MainWindow : FluentWindow
         _ => throw new ArgumentOutOfRangeException(nameof(trigger))
     };
 
-    private static string GetStatusSummary(HyperkeySettings settings)
+    private void UpdateDiagnosticStatus(InputEngineStatus status)
     {
-        var modifiers = string.Join(" ", settings.OutputModifiers.Select(GetModifierLabel));
-        return $"{GetTriggerLabel(settings.Trigger)} + {modifiers}";
-    }
-
-    private static string GetStatusDescription(HyperkeySettings settings)
-    {
-        if (!settings.Enabled)
-        {
-            return "The modifier layer is currently disabled.";
-        }
-
-        return App.CurrentApp.InputStatus switch
-        {
-            InputEngineStatus.Starting => "Starting the keyboard hook...",
-            InputEngineStatus.Running => $"Hold {GetTriggerLabel(settings.Trigger)} to use {string.Join(" + ", settings.OutputModifiers.Select(GetModifierLabel))}.",
-            InputEngineStatus.Stopping => "Stopping the keyboard hook...",
-            InputEngineStatus.Failed => $"The keyboard hook is unavailable. {App.CurrentApp.InputStatusError ?? "No error details were reported."}",
-            _ => "The keyboard engine is stopped."
-        };
-    }
-
-    private void UpdateStatusChip(InputEngineStatus status)
-    {
-        var label = GetInputStatusLabel(status);
-        StatusChipText.Text = label.ToUpperInvariant();
-        StatusHookText.Text = $"Hook status: {label}";
-        DiagnosticStatusText.Text = label;
-
-        Brush background;
-        Brush border;
-        Brush dot;
-        switch (status)
-        {
-            case InputEngineStatus.Running:
-                background = (Brush)FindResource("SystemFillColorSuccessBackgroundBrush");
-                border = (Brush)FindResource("SystemFillColorSuccessBrush");
-                dot = (Brush)FindResource("SystemFillColorSuccessBrush");
-                break;
-            case InputEngineStatus.Starting:
-            case InputEngineStatus.Stopping:
-                background = (Brush)FindResource("SystemFillColorCautionBackgroundBrush");
-                border = (Brush)FindResource("SystemFillColorCautionBrush");
-                dot = (Brush)FindResource("SystemFillColorCautionBrush");
-                break;
-            case InputEngineStatus.Failed:
-                background = (Brush)FindResource("SystemFillColorCriticalBackgroundBrush");
-                border = (Brush)FindResource("SystemFillColorCriticalBrush");
-                dot = (Brush)FindResource("SystemFillColorCriticalBrush");
-                break;
-            default:
-                background = (Brush)FindResource("ControlFillColorSecondaryBrush");
-                border = (Brush)FindResource("ControlStrokeColorDefaultBrush");
-                dot = (Brush)FindResource("TextFillColorTertiaryBrush");
-                break;
-        }
-
-        StatusChip.Background = background;
-        StatusChip.BorderBrush = border;
-        StatusDot.Fill = dot;
+        DiagnosticStatusText.Text = GetInputStatusLabel(status);
     }
 
     private static string GetInputStatusLabel(InputEngineStatus status) => status switch

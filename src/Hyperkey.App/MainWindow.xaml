@@ -65,43 +65,6 @@
                         Style="{StaticResource Hyperkey.PillToggle}" />
                 </Grid>
 
-                <!-- Primary status area: combination + helper + hook chip -->
-                <Border Style="{StaticResource Hyperkey.StatusPanel}">
-                    <StackPanel>
-                        <TextBlock
-                            x:Name="StatusText"
-                            Style="{StaticResource Hyperkey.StatusTitleText}" />
-                        <TextBlock
-                            x:Name="StatusDescription"
-                            Margin="0,6,0,0"
-                            Style="{StaticResource Hyperkey.BodyText}" />
-                        <StackPanel Margin="0,12,0,0" Orientation="Horizontal">
-                            <Border x:Name="StatusChip" Style="{StaticResource Hyperkey.StatusChip}">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Ellipse
-                                        x:Name="StatusDot"
-                                        Width="8"
-                                        Height="8"
-                                        VerticalAlignment="Center"
-                                        Fill="{DynamicResource SystemFillColorSuccessBrush}" />
-                                    <TextBlock
-                                        x:Name="StatusChipText"
-                                        Margin="6,0,0,0"
-                                        VerticalAlignment="Center"
-                                        Style="{StaticResource Hyperkey.StatusChipText}"
-                                        Text="RUNNING" />
-                                </StackPanel>
-                            </Border>
-                            <TextBlock
-                                x:Name="StatusHookText"
-                                Margin="8,0,0,0"
-                                VerticalAlignment="Center"
-                                Style="{StaticResource Hyperkey.CaptionText}"
-                                Text="Hook status: Running" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-
                 <!-- Trigger: rebindable key. Activate the button, then press Caps Lock or Scroll Lock. -->
                 <StackPanel Margin="0,20,0,0">
                     <TextBlock Style="{StaticResource Hyperkey.SectionHeading}" Text="TRIGGER KEY" />
