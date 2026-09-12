@@ -13,12 +13,14 @@ namespace Hyperkey.App;
 public partial class MainWindow : FluentWindow
 {
     private bool _isApplyingSettings;
+    private bool _isCapturingTrigger;
     private bool _allowClose;
 
     public MainWindow()
     {
         InitializeComponent();
         VersionText.Text = $"Version {AppVersion.Display}";
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
 
         Closing += MainWindow_Closing;
         App.CurrentApp.SettingsChanged += OnSettingsChanged;
@@ -57,15 +59,14 @@ public partial class MainWindow : FluentWindow
             EnabledToggle.IsChecked = settings.Enabled;
             LaunchToggle.IsChecked = settings.LaunchAtStartup;
             LaunchToTrayToggle.IsChecked = settings.LaunchToTray;
-            CapsLockTriggerButton.IsChecked = settings.Trigger == TriggerKey.CapsLock;
-            ScrollLockTriggerButton.IsChecked = settings.Trigger == TriggerKey.ScrollLock;
+            ExitTriggerCapture();
+            TriggerBindButton.Content = GetTriggerLabel(settings.Trigger);
             ControlModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Control);
             AltModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Alt);
             ShiftModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Shift);
 
             StatusText.Text = GetStatusSummary(settings);
             StatusDescription.Text = GetStatusDescription(settings);
-            UpdateEnabledBadge(settings.Enabled);
             UpdateStatusChip(App.CurrentApp.InputStatus);
 
             ModifierSelectionHintText.Visibility = Visibility.Visible;
@@ -115,27 +116,67 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void TriggerOption_Checked(object sender, RoutedEventArgs e)
+    private void TriggerBindButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isApplyingSettings)
+        if (_isApplyingSettings || _isCapturingTrigger)
         {
             return;
         }
 
-        TriggerKey? trigger = null;
-        if (sender == CapsLockTriggerButton)
+        EnterTriggerCapture();
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_isCapturingTrigger)
         {
-            trigger = TriggerKey.CapsLock;
-        }
-        else if (sender == ScrollLockTriggerButton)
-        {
-            trigger = TriggerKey.ScrollLock;
+            return;
         }
 
+        e.Handled = true;
+        if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            ExitTriggerCapture();
+            return;
+        }
+
+        var trigger = MapKeyToTrigger(e.Key);
         if (trigger.HasValue)
         {
             App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(trigger.Value));
         }
+        else
+        {
+            TriggerBindButton.Content = "Press a key…";
+            TriggerHintText.Text = "Only Caps Lock or Scroll Lock can be the trigger. Try again, or press Esc to cancel.";
+        }
+    }
+
+    private static TriggerKey? MapKeyToTrigger(System.Windows.Input.Key key) => key switch
+    {
+        System.Windows.Input.Key.CapsLock => TriggerKey.CapsLock,
+        System.Windows.Input.Key.Scroll => TriggerKey.ScrollLock,
+        _ => null
+    };
+
+    private void EnterTriggerCapture()
+    {
+        _isCapturingTrigger = true;
+        TriggerBindButton.Content = "Press a key…";
+        TriggerHintText.Text = "Press Caps Lock or Scroll Lock. Esc cancels.";
+    }
+
+    private void ExitTriggerCapture()
+    {
+        if (!_isCapturingTrigger)
+        {
+            TriggerHintText.Text = "Select to rebind — then press Caps Lock or Scroll Lock.";
+            return;
+        }
+
+        _isCapturingTrigger = false;
+        TriggerBindButton.Content = GetTriggerLabel(App.CurrentApp.Settings.Trigger);
+        TriggerHintText.Text = "Select to rebind — then press Caps Lock or Scroll Lock.";
     }
 
     private void OutputModifierCheckBox_Click(object sender, RoutedEventArgs e)
@@ -284,26 +325,6 @@ public partial class MainWindow : FluentWindow
             InputEngineStatus.Failed => $"The keyboard hook is unavailable. {App.CurrentApp.InputStatusError ?? "No error details were reported."}",
             _ => "The keyboard engine is stopped."
         };
-    }
-
-    private void UpdateEnabledBadge(bool enabled)
-    {
-        EnabledStateText.Text = enabled ? "On" : "Off";
-
-        // Theme-aware brushes; resolved per call so light/dark/high-contrast all work.
-        // Text always carries the state, so color is never the only signal.
-        if (enabled)
-        {
-            EnabledBadge.Background = (Brush)FindResource("SystemFillColorSuccessBackgroundBrush");
-            EnabledBadge.BorderBrush = (Brush)FindResource("SystemFillColorSuccessBrush");
-            EnabledDot.Fill = (Brush)FindResource("SystemFillColorSuccessBrush");
-        }
-        else
-        {
-            EnabledBadge.Background = (Brush)FindResource("ControlFillColorSecondaryBrush");
-            EnabledBadge.BorderBrush = (Brush)FindResource("ControlStrokeColorDefaultBrush");
-            EnabledDot.Fill = (Brush)FindResource("TextFillColorTertiaryBrush");
-        }
     }
 
     private void UpdateStatusChip(InputEngineStatus status)
