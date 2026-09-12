@@ -26,7 +26,7 @@
     <CornerRadius x:Key="Hyperkey.Radius.SegmentedItem">7</CornerRadius>
     <CornerRadius x:Key="Hyperkey.Radius.Keycap">10</CornerRadius>
     <CornerRadius x:Key="Hyperkey.Radius.Chip">7</CornerRadius>
-    <CornerRadius x:Key="Hyperkey.Radius.Button">7</CornerRadius>
+    <CornerRadius x:Key="Hyperkey.Radius.Button">10</CornerRadius>
     <CornerRadius x:Key="Hyperkey.Radius.Banner">10</CornerRadius>
 
     <!-- Typography scale -->
@@ -104,9 +104,11 @@
         <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
     </Style>
 
-    <!-- Header pill toggle: the single On/Off indicator. A CheckBox styled as a
-         capsule so it stays keyboard- and screen-reader-operable with visible focus.
-         State is carried by fill + dot + On/Off text, never color alone. -->
+    <!-- Header toggle: the single On/Off control, shaped as a rounded-rectangle
+         chip (same family as the status chip and keycaps) so it reads as a
+         button, not a status badge. A CheckBox so it stays keyboard- and
+         screen-reader-operable with visible focus. State is carried by fill +
+         dot + On/Off text, never color alone. -->
     <Style x:Key="Hyperkey.PillToggle" TargetType="CheckBox">
         <Setter Property="FontSize" Value="13" />
         <Setter Property="FontWeight" Value="SemiBold" />
@@ -117,11 +119,11 @@
                 <ControlTemplate TargetType="CheckBox">
                     <Border
                         x:Name="Root"
-                        MinWidth="64"
+                        MinWidth="72"
                         Background="{DynamicResource ControlFillColorSecondaryBrush}"
                         BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="999"
+                        BorderThickness="1,1,1,3"
+                        CornerRadius="10"
                         Padding="12,6">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <Ellipse

@@ -261,7 +261,8 @@
                                 Padding="14,7"
                                 AutomationProperties.Name="Restart keyboard hook"
                                 Click="RestartHook_Click"
-                                Content="Restart hook" />
+                                Content="Restart hook"
+                                CornerRadius="{StaticResource Hyperkey.Radius.Button}" />
                             <ui:Button
                                 Margin="0,0,8,8"
                                 Padding="14,7"
@@ -269,13 +270,15 @@
                                 BorderBrush="{DynamicResource SystemFillColorCriticalBrush}"
                                 Click="EmergencyDisable_Click"
                                 Content="Emergency disable"
+                                CornerRadius="{StaticResource Hyperkey.Radius.Button}"
                                 Foreground="{DynamicResource SystemFillColorCriticalBrush}" />
                             <ui:Button
                                 Margin="0,0,0,8"
                                 Padding="14,7"
                                 AutomationProperties.Name="Copy diagnostic details"
                                 Click="CopyDiagnostics_Click"
-                                Content="Copy details" />
+                                Content="Copy details"
+                                CornerRadius="{StaticResource Hyperkey.Radius.Button}" />
                         </WrapPanel>
                     </StackPanel>
                 </Border>
