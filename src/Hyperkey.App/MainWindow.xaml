@@ -65,7 +65,7 @@
                         Style="{StaticResource Hyperkey.PillToggle}" />
                 </Grid>
 
-                <!-- Trigger: rebindable key. Activate the button, then press Caps Lock or Scroll Lock. -->
+                <!-- Trigger: rebindable key. Activate the button, then press any key. -->
                 <StackPanel Margin="0,20,0,0">
                     <TextBlock Style="{StaticResource Hyperkey.SectionHeading}" Text="TRIGGER KEY" />
                     <Button
@@ -78,7 +78,7 @@
                         x:Name="TriggerHintText"
                         Margin="0,6,0,0"
                         Style="{StaticResource Hyperkey.CaptionText}"
-                        Text="Select to rebind — then press Caps Lock or Scroll Lock." />
+                        Text="Select to rebind — press any key. Esc cancels." />
                 </StackPanel>
 
                 <!-- Output modifiers: keycap toggles -->

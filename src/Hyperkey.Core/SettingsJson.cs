@@ -21,7 +21,9 @@ public static class SettingsJson
     {
         var document = new PersistedSettings
         {
-            SchemaVersion = settings.SchemaVersion,
+            // Files on disk always declare the newest schema this binary writes.
+            // Older schema versions remain readable (see Parse).
+            SchemaVersion = HyperkeySettings.CurrentSchemaVersion,
             Enabled = settings.Enabled,
             Trigger = ToWireName(settings.Trigger),
             OutputModifiers = settings.OutputModifiers.Select(ToWireName).ToArray(),
@@ -40,7 +42,7 @@ public static class SettingsJson
             var document = JsonSerializer.Deserialize<PersistedSettings>(json, SerializerOptions)
                 ?? throw new InvalidDataException("The settings document was empty.");
 
-            if (document.SchemaVersion is not HyperkeySettings.CurrentSchemaVersion)
+            if (document.SchemaVersion is not (1 or 2))
             {
                 throw new InvalidDataException($"Unsupported settings schema: {document.SchemaVersion}.");
             }
@@ -75,12 +77,10 @@ public static class SettingsJson
         }
     }
 
-    private static TriggerKey ParseTrigger(string? value) => value switch
-    {
-        not null when string.Equals(value, "CapsLock", StringComparison.OrdinalIgnoreCase) => TriggerKey.CapsLock,
-        not null when string.Equals(value, "ScrollLock", StringComparison.OrdinalIgnoreCase) => TriggerKey.ScrollLock,
-        _ => throw new InvalidDataException($"Unsupported trigger key: {value ?? "missing"}.")
-    };
+    private static TriggerKey ParseTrigger(string? value) =>
+        TriggerKey.TryParse(value, out var trigger)
+            ? trigger
+            : throw new InvalidDataException($"Unsupported trigger key: {value ?? "missing"}.");
 
     private static TapBehavior ParseTapBehavior(string? value) => value switch
     {
@@ -119,12 +119,7 @@ public static class SettingsJson
         return parsed.ToImmutable();
     }
 
-    private static string ToWireName(TriggerKey trigger) => trigger switch
-    {
-        TriggerKey.CapsLock => "CapsLock",
-        TriggerKey.ScrollLock => "ScrollLock",
-        _ => throw new ArgumentOutOfRangeException(nameof(trigger))
-    };
+    private static string ToWireName(TriggerKey trigger) => trigger.WireName;
 
     private static string ToWireName(OutputModifier modifier) => modifier switch
     {

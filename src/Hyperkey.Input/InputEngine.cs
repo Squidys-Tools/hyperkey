@@ -384,7 +384,7 @@ public sealed class InputEngine : IDisposable
     {
         if (!_modifierSynthesizer.TryReplayTrigger(triggerKey, out var error))
         {
-            SetStatus(InputEngineStatus.Failed, error ?? "The Caps Lock tap could not be replayed.");
+            SetStatus(InputEngineStatus.Failed, error ?? "The trigger-key tap could not be replayed.");
         }
 
         // The physical key-down was already suppressed, so the physical key-up must

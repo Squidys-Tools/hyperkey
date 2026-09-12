@@ -137,43 +137,84 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        var trigger = MapKeyToTrigger(e.Key);
-        if (trigger.HasValue)
+        if (IsModifierOrSystemKey(e.Key) || HasHeldModifiers())
         {
-            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(trigger.Value));
+            TriggerBindButton.Content = "Press a key…";
+            TriggerHintText.Text = "Modifier and system keys can't be the trigger. Press a letter, digit, function key, or punctuation — or press Esc to cancel.";
+            return;
+        }
+
+        if (TryMapCaptureKey(e.Key, out var trigger))
+        {
+            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(trigger));
         }
         else
         {
             TriggerBindButton.Content = "Press a key…";
-            TriggerHintText.Text = "Only Caps Lock or Scroll Lock can be the trigger. Try again, or press Esc to cancel.";
+            TriggerHintText.Text = "That key can't be used as the trigger. Try another key, or press Esc to cancel.";
         }
     }
 
-    private static TriggerKey? MapKeyToTrigger(System.Windows.Input.Key key) => key switch
+    private static bool TryMapCaptureKey(System.Windows.Input.Key key, out TriggerKey trigger)
     {
-        System.Windows.Input.Key.CapsLock => TriggerKey.CapsLock,
-        System.Windows.Input.Key.Scroll => TriggerKey.ScrollLock,
-        _ => null
-    };
+        trigger = default;
+
+        try
+        {
+            var virtualKey = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
+            if (virtualKey is <= 0 or > 0xFF)
+            {
+                return false;
+            }
+
+            return TriggerKey.TryCreate((ushort)virtualKey, out trigger);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsModifierOrSystemKey(System.Windows.Input.Key key) =>
+        key is System.Windows.Input.Key.None
+            or System.Windows.Input.Key.System
+            or System.Windows.Input.Key.LeftShift
+            or System.Windows.Input.Key.RightShift
+            or System.Windows.Input.Key.LeftCtrl
+            or System.Windows.Input.Key.RightCtrl
+            or System.Windows.Input.Key.LeftAlt
+            or System.Windows.Input.Key.RightAlt
+            or System.Windows.Input.Key.LWin
+            or System.Windows.Input.Key.RWin
+            or System.Windows.Input.Key.Apps
+            or System.Windows.Input.Key.DeadCharProcessed
+            or System.Windows.Input.Key.ImeProcessed;
+
+    private static bool HasHeldModifiers() =>
+        (System.Windows.Input.Keyboard.Modifiers
+            & (System.Windows.Input.ModifierKeys.Alt
+                | System.Windows.Input.ModifierKeys.Control
+                | System.Windows.Input.ModifierKeys.Shift
+                | System.Windows.Input.ModifierKeys.Windows)) != 0;
 
     private void EnterTriggerCapture()
     {
         _isCapturingTrigger = true;
         TriggerBindButton.Content = "Press a key…";
-        TriggerHintText.Text = "Press Caps Lock or Scroll Lock. Esc cancels.";
+        TriggerHintText.Text = "Press the key to use as trigger. Esc cancels.";
     }
 
     private void ExitTriggerCapture()
     {
         if (!_isCapturingTrigger)
         {
-            TriggerHintText.Text = "Select to rebind — then press Caps Lock or Scroll Lock.";
+            TriggerHintText.Text = IdleTriggerHint;
             return;
         }
 
         _isCapturingTrigger = false;
         TriggerBindButton.Content = GetTriggerLabel(App.CurrentApp.Settings.Trigger);
-        TriggerHintText.Text = "Select to rebind — then press Caps Lock or Scroll Lock.";
+        TriggerHintText.Text = IdleTriggerHint;
     }
 
     private void OutputModifierCheckBox_Click(object sender, RoutedEventArgs e)
@@ -286,12 +327,9 @@ public partial class MainWindow : FluentWindow
         return selected.ToImmutable();
     }
 
-    private static string GetTriggerLabel(TriggerKey trigger) => trigger switch
-    {
-        TriggerKey.CapsLock => "Caps Lock",
-        TriggerKey.ScrollLock => "Scroll Lock",
-        _ => throw new ArgumentOutOfRangeException(nameof(trigger))
-    };
+    private const string IdleTriggerHint = "Select to rebind — press any key. Esc cancels.";
+
+    private static string GetTriggerLabel(TriggerKey trigger) => trigger.DisplayLabel;
 
     private void UpdateDiagnosticStatus(InputEngineStatus status)
     {

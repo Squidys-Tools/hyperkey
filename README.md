@@ -4,7 +4,7 @@ Hyperkey turns a key you rarely use into a new modifier layer, like Ctrl or Alt 
 
 ## How it works
 
-Pick a trigger key (Caps Lock or Scroll Lock) and a set of modifiers (Ctrl, Alt, Shift, any combination).
+Pick any trigger key (a letter, digit, function key, punctuation, Caps Lock, and more) and a set of modifiers (Ctrl, Alt, Shift, any combination).
 
 Hold the trigger key and every other key you press acts as if those modifiers were held too. For example, with Caps Lock as the trigger and Ctrl+Alt+Shift as the output:
 
@@ -28,7 +28,7 @@ Requires Windows 10 version 19041 or newer.
 Settings live in one window, opened from the tray icon:
 
 - **Enabled** turns the whole thing on or off without quitting.
-- **Trigger key** picks between Caps Lock and Scroll Lock.
+- **Trigger key** rebinds to any normal key: select Rebind, then press the key. Modifier, system, and extended keys (arrows, Home/End, media keys, …) are rejected. Tapping the trigger on its own still types it like normal.
 - **Output modifiers** picks which of Ctrl, Alt, or Shift the layer sends. Pick at least one.
 - **Launch at login** starts Hyperkey when you sign in. **Launch to tray** keeps the settings window closed at startup.
 

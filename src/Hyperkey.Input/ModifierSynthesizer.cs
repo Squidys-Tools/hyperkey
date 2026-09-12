@@ -12,8 +12,7 @@ public sealed class ModifierSynthesizer
     private const uint InputKeyboard = 1;
     private const uint KeyEventFlagKeyUp = 0x0002;
     private const uint KeyEventFlagScanCode = 0x0008;
-    private const ushort CapsLockScanCode = 0x003A;
-    private const ushort ScrollLockScanCode = 0x0046;
+    private const uint MapVirtualKeyToScanCode = 0;
     private readonly object _stateGate = new();
     private readonly HashSet<OutputModifier> _pressedModifiers = new();
 
@@ -49,7 +48,7 @@ public sealed class ModifierSynthesizer
                 .Where(modifier => _pressedModifiers.Contains(modifier))
                 .ToImmutableArray();
             var sendOrder = logicalModifiers.Reverse().ToImmutableArray();
-            var inputs = CreateInputs(sendOrder, isKeyUp: false);
+            var inputs = CreateInputs(sendOrder, isKeyUp: true);
             var sent = Send(inputs);
             RemoveSentReleases(sendOrder, sent);
 
@@ -76,7 +75,12 @@ public sealed class ModifierSynthesizer
 
     public bool TryReplayTrigger(TriggerKey triggerKey, out string? error)
     {
-        var scanCode = GetTriggerScanCode(triggerKey);
+        if (!TryGetTriggerScanCode(triggerKey, out var scanCode))
+        {
+            error = "The trigger key could not be mapped to a replayable scan code.";
+            return false;
+        }
+
         var inputs = new[]
         {
             CreateInput(scanCode, isKeyUp: false),
@@ -132,7 +136,7 @@ public sealed class ModifierSynthesizer
             .Where(modifier => _pressedModifiers.Contains(modifier))
             .ToImmutableArray();
         var sendOrder = logicalModifiers.Reverse().ToImmutableArray();
-        var inputs = CreateInputs(sendOrder, isKeyUp: false);
+        var inputs = CreateInputs(sendOrder, isKeyUp: true);
         if (inputs.Length > 0)
         {
             Send(inputs);
@@ -167,17 +171,29 @@ public sealed class ModifierSynthesizer
         _ => throw new ArgumentOutOfRangeException(nameof(modifier))
     };
 
-    private static ushort GetTriggerScanCode(TriggerKey triggerKey) => triggerKey switch
+    private static bool TryGetTriggerScanCode(TriggerKey triggerKey, out ushort scanCode)
     {
-        TriggerKey.CapsLock => CapsLockScanCode,
-        TriggerKey.ScrollLock => ScrollLockScanCode,
-        _ => throw new ArgumentOutOfRangeException(nameof(triggerKey), triggerKey, "Unknown trigger key.")
-    };
+        // Resolve the scan code from the active keyboard layout so replayed taps
+        // match the physical key on any layout. Triggers are restricted to keys
+        // with plain (non-extended) scan codes, so the high byte must be clear.
+        var mapped = MapVirtualKey(triggerKey.VirtualKeyCode, MapVirtualKeyToScanCode);
+        if (mapped == 0 || (mapped & 0xFF00) != 0)
+        {
+            scanCode = 0;
+            return false;
+        }
+
+        scanCode = (ushort)mapped;
+        return true;
+    }
 
     private static uint Send(INPUT[] inputs) => SendInput(
         (uint)inputs.Length,
         inputs,
         Marshal.SizeOf<INPUT>());
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
