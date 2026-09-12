@@ -2,12 +2,6 @@ using System.Collections.Immutable;
 
 namespace Hyperkey.Core;
 
-public enum TriggerKey
-{
-    CapsLock,
-    ScrollLock
-}
-
 public enum OutputModifier
 {
     Control,
@@ -22,7 +16,7 @@ public enum TapBehavior
 
 public sealed record HyperkeySettings
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private HyperkeySettings(
         int schemaVersion,
@@ -76,12 +70,12 @@ public sealed record HyperkeySettings
         TapBehavior tapBehavior,
         int schemaVersion = CurrentSchemaVersion)
     {
-        if (schemaVersion != CurrentSchemaVersion)
+        if (schemaVersion is < 1 or > CurrentSchemaVersion)
         {
             throw new ArgumentOutOfRangeException(nameof(schemaVersion));
         }
 
-        if (trigger is not TriggerKey.CapsLock and not TriggerKey.ScrollLock)
+        if (!trigger.IsSupported)
         {
             throw new ArgumentOutOfRangeException(nameof(trigger));
         }

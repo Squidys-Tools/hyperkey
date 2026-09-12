@@ -3,6 +3,7 @@ using Hyperkey.Core;
 using Hyperkey.Input;
 using Microsoft.Win32;
 using System.Windows;
+using System.Windows.Media;
 using Wpf.Ui.Appearance;
 
 namespace Hyperkey.App;
@@ -73,6 +74,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
         ApplicationThemeManager.ApplySystemTheme();
+        ApplyHyperkeyAccent();
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
 
@@ -293,6 +295,40 @@ public partial class App : Application
     {
         var result = _startupRegistrationService.Apply(enabled);
         _startupRegistrationError = result.Succeeded ? null : result.Error;
+    }
+
+    /// <summary>
+    /// Fixes the accent color to Hyperkey blue (#0B64D2) in light and dark themes
+    /// so selected states match the design. High-contrast themes keep the system
+    /// accent so accessibility behavior is preserved.
+    /// </summary>
+    private static void ApplyHyperkeyAccent()
+    {
+        if (ApplicationThemeManager.GetAppTheme() == ApplicationTheme.HighContrast)
+        {
+            return;
+        }
+
+        var accent = Color.FromRgb(0x0B, 0x64, 0xD2);
+        var isDark = ApplicationThemeManager.GetAppTheme() == ApplicationTheme.Dark;
+        // Accent-tinted text needs a lighter variant on dark surfaces to stay readable.
+        var accentText = isDark ? Color.FromRgb(0x7B, 0xAE, 0xE8) : accent;
+        var resources = Current.Resources;
+        resources["SystemAccentColor"] = accent;
+        resources["SystemAccentColorPrimary"] = accent;
+        resources["SystemAccentColorSecondary"] = accent;
+        resources["SystemAccentColorTertiary"] = accent;
+        resources["SystemAccentColorPrimaryBrush"] = new SolidColorBrush(accent);
+        resources["SystemAccentColorSecondaryBrush"] = new SolidColorBrush(accent);
+        resources["SystemAccentColorTertiaryBrush"] = new SolidColorBrush(accent);
+        resources["AccentFillColorDefaultBrush"] = new SolidColorBrush(accent);
+        resources["AccentFillColorSecondaryBrush"] = new SolidColorBrush(Color.FromArgb(0xE6, accent.R, accent.G, accent.B));
+        resources["AccentFillColorTertiaryBrush"] = new SolidColorBrush(Color.FromArgb(0xCC, accent.R, accent.G, accent.B));
+        resources["AccentTextFillColorPrimaryBrush"] = new SolidColorBrush(accentText);
+        resources["AccentTextFillColorSecondaryBrush"] = new SolidColorBrush(accentText);
+        resources["AccentTextFillColorTertiaryBrush"] = new SolidColorBrush(accentText);
+        resources["TextOnAccentFillColorPrimaryBrush"] = new SolidColorBrush(Colors.White);
+        resources["TextOnAccentFillColorSecondaryBrush"] = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
     }
 
     private void Quit()

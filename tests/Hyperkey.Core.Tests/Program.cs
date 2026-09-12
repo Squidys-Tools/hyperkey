@@ -24,6 +24,14 @@ internal static class Program
             SyntheticEventsNeverChangeTheState();
             SyntheticEventsPassThroughWhileHyperActive();
             RepeatedCyclesDoNotAccumulateState();
+            ArbitraryLetterTriggerRunsFullCycle();
+            FunctionKeyTriggerTapReplays();
+            TriggerKeyAllowlistAcceptsNormalKeys();
+            TriggerKeyAllowlistRejectsReservedKeys();
+            TriggerWireNamesRoundTrip();
+            LegacySchemaVersionOneStillLoads();
+            UnknownTriggerNameFallsBackToDefaults();
+            EngineLoopback.GeneralizedTriggerWorksEndToEndOnTheRealHook();
 
             Console.WriteLine("Hyperkey.Core.Tests passed.");
             return 0;
@@ -210,6 +218,171 @@ internal static class Program
         }
     }
 
+    private static void ArbitraryLetterTriggerRunsFullCycle()
+    {
+        AssertTrue(TriggerKey.TryCreate(0x4A, out var trigger), "Expected J to be a supported trigger.");
+        AssertEqual("J", trigger.WireName);
+
+        var held = TriggerStateMachine.Process(TriggerMachineState.Idle, Key(0x4A, KeyTransition.Down), trigger, Modifiers);
+        AssertEqual(TriggerPhase.TriggerHeld, held.State.Phase);
+        AssertType<InputDecision.Suppress>(held.Decision);
+
+        var tapped = TriggerStateMachine.Process(held.State, Key(0x4A, KeyTransition.Up), trigger, Modifiers);
+        AssertEqual(TriggerPhase.Idle, tapped.State.Phase);
+        AssertType<InputDecision.ReplayTrigger>(tapped.Decision);
+
+        var reheld = TriggerStateMachine.Process(TriggerMachineState.Idle, Key(0x4A, KeyTransition.Down), trigger, Modifiers);
+        var active = TriggerStateMachine.Process(reheld.State, Key(0x4B, KeyTransition.Down), trigger, Modifiers);
+        AssertEqual(TriggerPhase.HyperActive, active.State.Phase);
+        var press = AssertType<InputDecision.PressAndForward>(active.Decision);
+        AssertEqual(Modifiers, press.Modifiers);
+
+        var released = TriggerStateMachine.Process(active.State, Key(0x4A, KeyTransition.Up), trigger, Modifiers);
+        AssertEqual(TriggerPhase.Idle, released.State.Phase);
+        AssertType<InputDecision.ReleaseAndSuppress>(released.Decision);
+
+        // Other letters are ordinary keys while J is the trigger.
+        var unrelated = TriggerStateMachine.Process(TriggerMachineState.Idle, Key(0x41, KeyTransition.Down), trigger, Modifiers);
+        AssertEqual(TriggerPhase.Idle, unrelated.State.Phase);
+        AssertType<InputDecision.PassThrough>(unrelated.Decision);
+    }
+
+    private static void FunctionKeyTriggerTapReplays()
+    {
+        AssertTrue(TriggerKey.TryCreate(0x78, out var trigger), "Expected F9 to be a supported trigger.");
+        AssertEqual("F9", trigger.WireName);
+        AssertEqual("F9", trigger.DisplayLabel);
+
+        var held = TriggerStateMachine.Process(TriggerMachineState.Idle, Key(0x78, KeyTransition.Down), trigger, Modifiers);
+        AssertType<InputDecision.Suppress>(held.Decision);
+
+        var released = TriggerStateMachine.Process(held.State, Key(0x78, KeyTransition.Up), trigger, Modifiers);
+        AssertEqual(TriggerPhase.Idle, released.State.Phase);
+        AssertType<InputDecision.ReplayTrigger>(released.Decision);
+    }
+
+    private static void TriggerKeyAllowlistAcceptsNormalKeys()
+    {
+        var accepted = new (ushort Code, string Wire, string Label)[]
+        {
+            (0x08, "Back", "Backspace"),
+            (0x09, "Tab", "Tab"),
+            (0x0D, "Enter", "Enter"),
+            (0x14, "CapsLock", "Caps Lock"),
+            (0x20, "Space", "Space"),
+            (0x30, "D0", "0"),
+            (0x33, "D3", "3"),
+            (0x39, "D9", "9"),
+            (0x41, "A", "A"),
+            (0x4A, "J", "J"),
+            (0x5A, "Z", "Z"),
+            (0x60, "NumPad0", "NumPad0"),
+            (0x65, "NumPad5", "NumPad5"),
+            (0x6A, "NumPadMultiply", "Num *"),
+            (0x6E, "NumPadDecimal", "Num ."),
+            (0x70, "F1", "F1"),
+            (0x78, "F9", "F9"),
+            (0x87, "F24", "F24"),
+            (0x90, "NumLock", "Num Lock"),
+            (0x91, "ScrollLock", "Scroll Lock"),
+            (0xBA, "OemSemicolon", ";"),
+            (0xBC, "OemComma", ","),
+            (0xBF, "OemQuestion", "/"),
+            (0xC0, "OemTilde", "`"),
+            (0xDB, "OemOpenBrackets", "["),
+            (0xDC, "OemBackslash", "\\"),
+            (0xDE, "OemQuotes", "'"),
+        };
+
+        foreach (var (code, wire, label) in accepted)
+        {
+            AssertTrue(TriggerKey.TryCreate(code, out var trigger), $"Expected 0x{code:X2} to be a supported trigger.");
+            AssertEqual(wire, trigger.WireName);
+            AssertEqual(label, trigger.DisplayLabel);
+            AssertTrue(TriggerKey.IsSupportedKey(code), $"Expected 0x{code:X2} to report supported.");
+            AssertTrue(TriggerKey.TryParse(wire, out var parsed), $"Expected wire name {wire} to parse.");
+            AssertEqual(trigger, parsed);
+            AssertTrue(TriggerKey.TryParse(wire.ToLowerInvariant(), out _), $"Expected wire name {wire} to parse case-insensitively.");
+        }
+
+        AssertEqual("CapsLock", TriggerKey.CapsLock.WireName);
+        AssertEqual("Caps Lock", TriggerKey.CapsLock.DisplayLabel);
+        AssertEqual("ScrollLock", TriggerKey.ScrollLock.WireName);
+        AssertEqual("Scroll Lock", TriggerKey.ScrollLock.DisplayLabel);
+        AssertEqual("Caps Lock", TriggerKey.CapsLock.ToString());
+    }
+
+    private static void TriggerKeyAllowlistRejectsReservedKeys()
+    {
+        // Modifiers, system-reserved, extended-scan-code, media, and synthetic codes.
+        ushort[] rejected =
+        {
+            0x00, 0x10, 0x11, 0x12, 0x13, 0x1B, 0x25, 0x26, 0x27, 0x28,
+            0x2C, 0x2D, 0x2E, 0x5B, 0x5C, 0x5D, 0x6F, 0xA0, 0xA1, 0xA2,
+            0xA3, 0xA4, 0xA5, 0xAD, 0xB3, 0xE7, 0xFF
+        };
+
+        foreach (var code in rejected)
+        {
+            AssertTrue(!TriggerKey.TryCreate(code, out _), $"Expected 0x{code:X2} to be rejected as a trigger.");
+            AssertTrue(!TriggerKey.IsSupportedKey(code), $"Expected 0x{code:X2} to report unsupported.");
+        }
+
+        AssertTrue(!TriggerKey.TryParse(null, out _), "Expected a missing trigger name to be rejected.");
+        AssertTrue(!TriggerKey.TryParse("Win", out _), "Expected an unknown trigger name to be rejected.");
+        AssertTrue(!TriggerKey.TryParse("Shift", out _), "Expected a modifier name to be rejected as a trigger.");
+    }
+
+    private static void TriggerWireNamesRoundTrip()
+    {
+        foreach (var wire in new[] { "F9", "D3", "Space", "OemComma", "Enter", "J", "CapsLock", "ScrollLock" })
+        {
+            AssertTrue(TriggerKey.TryParse(wire, out var trigger), $"Expected {wire} to parse.");
+            var configured = HyperkeySettings.Defaults.WithTrigger(trigger);
+            var result = SettingsJson.Parse(SettingsJson.Serialize(configured));
+
+            AssertEqual(false, result.UsedDefaults);
+            AssertEqual(trigger, result.Settings.Trigger);
+        }
+
+        var serialized = SettingsJson.Serialize(HyperkeySettings.Defaults);
+        if (!serialized.Contains("\"schemaVersion\": 2", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Expected new settings documents to declare schema version 2.");
+        }
+    }
+
+    private static void LegacySchemaVersionOneStillLoads()
+    {
+        var legacyVersionOne = """
+            {
+              "schemaVersion": 1,
+              "enabled": true,
+              "trigger": "ScrollLock",
+              "outputModifiers": ["Control"],
+              "launchAtStartup": false,
+              "launchToTray": true,
+              "tapBehavior": "CapsLock"
+            }
+            """;
+        var result = SettingsJson.Parse(legacyVersionOne);
+
+        AssertEqual(false, result.UsedDefaults);
+        AssertEqual(TriggerKey.ScrollLock, result.Settings.Trigger);
+        AssertEqual(1, result.Settings.SchemaVersion);
+        AssertEqual(true, result.Settings.LaunchToTray);
+    }
+
+    private static void UnknownTriggerNameFallsBackToDefaults()
+    {
+        var serialized = SettingsJson.Serialize(HyperkeySettings.Defaults)
+            .Replace("\"trigger\": \"CapsLock\"", "\"trigger\": \"Win\"", StringComparison.Ordinal);
+        var result = SettingsJson.Parse(serialized);
+
+        AssertEqual(true, result.UsedDefaults);
+        AssertEqual(HyperkeySettings.Defaults, result.Settings);
+    }
+
     private static TriggerTransition Process(TriggerMachineState state, KeyboardEvent input) =>
         TriggerStateMachine.Process(state, input, Modifiers);
 
@@ -234,6 +407,14 @@ internal static class Program
         }
 
         return typedDecision;
+    }
+
+    private static void AssertTrue(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
     }
 
     private static void AssertEqual<T>(T expected, T actual)

@@ -14,7 +14,9 @@ The MVP will do one thing:
 
 Included:
 
-- Caps Lock and Scroll Lock as trigger-key choices.
+- Any normal keyboard key as the trigger (letters, digits, function keys,
+  punctuation, Caps Lock, Scroll Lock, …). Modifier, system, and
+  extended-scan-code keys are rejected.
 - Any non-empty combination of Ctrl, Alt, and Shift as the output modifier layer.
 - Background operation with a tray icon.
 - A single settings window.
@@ -56,7 +58,7 @@ Hyperkey
   Enabled status card
 
 Keyboard
-  Trigger key: Caps Lock or Scroll Lock
+  Trigger key: any supported key, rebound through the settings window
   Output: selected Ctrl / Alt / Shift modifiers
 
 Startup

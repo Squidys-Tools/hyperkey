@@ -56,6 +56,7 @@ This document tracks the implementation phases and current project status.
 - [x] Installer definition (Inno Setup)
 - [x] Packaging script (`scripts/package-installer.ps1`)
 - [x] Per-user startup registration (native shell)
+- [x] Rebindable trigger key (any normal keyboard key; settings schema v2)
 - [ ] Installer validation and testing
 - [ ] Code signing
 - [ ] Application icon and tray assets (deferred)
@@ -82,7 +83,6 @@ This document tracks the implementation phases and current project status.
 - Macros and text expansion
 - App launching and window management
 - Scoop package manager support
-- Additional trigger key options
 
 ---
 

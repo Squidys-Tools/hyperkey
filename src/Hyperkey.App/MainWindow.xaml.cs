@@ -11,21 +11,15 @@ namespace Hyperkey.App;
 
 public partial class MainWindow : FluentWindow
 {
-    private static readonly IReadOnlyList<TriggerOption> TriggerOptions =
-    [
-        new(TriggerKey.CapsLock, "Caps Lock"),
-        new(TriggerKey.ScrollLock, "Scroll Lock")
-    ];
-
     private bool _isApplyingSettings;
+    private bool _isCapturingTrigger;
     private bool _allowClose;
 
     public MainWindow()
     {
         InitializeComponent();
         VersionText.Text = $"Version {AppVersion.Display}";
-        TriggerKeySelector.ItemsSource = TriggerOptions;
-        TriggerKeySelector.DisplayMemberPath = nameof(TriggerOption.Label);
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
 
         Closing += MainWindow_Closing;
         App.CurrentApp.SettingsChanged += OnSettingsChanged;
@@ -64,13 +58,13 @@ public partial class MainWindow : FluentWindow
             EnabledToggle.IsChecked = settings.Enabled;
             LaunchToggle.IsChecked = settings.LaunchAtStartup;
             LaunchToTrayToggle.IsChecked = settings.LaunchToTray;
-            TriggerKeySelector.SelectedItem = TriggerOptions.Single(option => option.Key == settings.Trigger);
+            ExitTriggerCapture();
+            TriggerBindButton.Content = GetTriggerLabel(settings.Trigger);
             ControlModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Control);
             AltModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Alt);
             ShiftModifierCheckBox.IsChecked = settings.OutputModifiers.Contains(OutputModifier.Shift);
 
-            StatusText.Text = settings.Enabled ? "Hyperkey is on" : "Hyperkey is off";
-            StatusDescription.Text = GetStatusDescription(settings);
+            UpdateDiagnosticStatus(App.CurrentApp.InputStatus);
 
             ModifierSelectionHintText.Visibility = Visibility.Visible;
 
@@ -119,12 +113,108 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void TriggerKeySelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void TriggerBindButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_isApplyingSettings && TriggerKeySelector.SelectedItem is TriggerOption option)
+        if (_isApplyingSettings || _isCapturingTrigger)
         {
-            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(option.Key));
+            return;
         }
+
+        EnterTriggerCapture();
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_isCapturingTrigger)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            ExitTriggerCapture();
+            return;
+        }
+
+        if (IsModifierOrSystemKey(e.Key) || HasHeldModifiers())
+        {
+            TriggerBindButton.Content = "Press a key…";
+            TriggerHintText.Text = "Modifier and system keys can't be the trigger. Press a letter, digit, function key, or punctuation — or press Esc to cancel.";
+            return;
+        }
+
+        if (TryMapCaptureKey(e.Key, out var trigger))
+        {
+            App.CurrentApp.UpdateSettings(App.CurrentApp.Settings.WithTrigger(trigger));
+        }
+        else
+        {
+            TriggerBindButton.Content = "Press a key…";
+            TriggerHintText.Text = "That key can't be used as the trigger. Try another key, or press Esc to cancel.";
+        }
+    }
+
+    private static bool TryMapCaptureKey(System.Windows.Input.Key key, out TriggerKey trigger)
+    {
+        trigger = default;
+
+        try
+        {
+            var virtualKey = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
+            if (virtualKey is <= 0 or > 0xFF)
+            {
+                return false;
+            }
+
+            return TriggerKey.TryCreate((ushort)virtualKey, out trigger);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsModifierOrSystemKey(System.Windows.Input.Key key) =>
+        key is System.Windows.Input.Key.None
+            or System.Windows.Input.Key.System
+            or System.Windows.Input.Key.LeftShift
+            or System.Windows.Input.Key.RightShift
+            or System.Windows.Input.Key.LeftCtrl
+            or System.Windows.Input.Key.RightCtrl
+            or System.Windows.Input.Key.LeftAlt
+            or System.Windows.Input.Key.RightAlt
+            or System.Windows.Input.Key.LWin
+            or System.Windows.Input.Key.RWin
+            or System.Windows.Input.Key.Apps
+            or System.Windows.Input.Key.DeadCharProcessed
+            or System.Windows.Input.Key.ImeProcessed;
+
+    private static bool HasHeldModifiers() =>
+        (System.Windows.Input.Keyboard.Modifiers
+            & (System.Windows.Input.ModifierKeys.Alt
+                | System.Windows.Input.ModifierKeys.Control
+                | System.Windows.Input.ModifierKeys.Shift
+                | System.Windows.Input.ModifierKeys.Windows)) != 0;
+
+    private void EnterTriggerCapture()
+    {
+        _isCapturingTrigger = true;
+        TriggerBindButton.Content = "Press a key…";
+        TriggerHintText.Text = "Press the key to use as trigger. Esc cancels.";
+    }
+
+    private void ExitTriggerCapture()
+    {
+        if (!_isCapturingTrigger)
+        {
+            TriggerHintText.Text = IdleTriggerHint;
+            return;
+        }
+
+        _isCapturingTrigger = false;
+        TriggerBindButton.Content = GetTriggerLabel(App.CurrentApp.Settings.Trigger);
+        TriggerHintText.Text = IdleTriggerHint;
     }
 
     private void OutputModifierCheckBox_Click(object sender, RoutedEventArgs e)
@@ -237,36 +327,13 @@ public partial class MainWindow : FluentWindow
         return selected.ToImmutable();
     }
 
-    private static string GetModifierLabel(OutputModifier modifier) => modifier switch
-    {
-        OutputModifier.Control => "Ctrl",
-        OutputModifier.Alt => "Alt",
-        OutputModifier.Shift => "Shift",
-        _ => throw new ArgumentOutOfRangeException(nameof(modifier))
-    };
+    private const string IdleTriggerHint = "Select to rebind — press any key. Esc cancels.";
 
-    private static string GetTriggerLabel(TriggerKey trigger) => trigger switch
-    {
-        TriggerKey.CapsLock => "Caps Lock",
-        TriggerKey.ScrollLock => "Scroll Lock",
-        _ => throw new ArgumentOutOfRangeException(nameof(trigger))
-    };
+    private static string GetTriggerLabel(TriggerKey trigger) => trigger.DisplayLabel;
 
-    private static string GetStatusDescription(HyperkeySettings settings)
+    private void UpdateDiagnosticStatus(InputEngineStatus status)
     {
-        if (!settings.Enabled)
-        {
-            return "The modifier layer is currently disabled.";
-        }
-
-        return App.CurrentApp.InputStatus switch
-        {
-            InputEngineStatus.Starting => "Starting the keyboard hook...",
-            InputEngineStatus.Running => $"Hold {GetTriggerLabel(settings.Trigger)} to use {string.Join(" + ", settings.OutputModifiers.Select(GetModifierLabel))}.",
-            InputEngineStatus.Stopping => "Stopping the keyboard hook...",
-            InputEngineStatus.Failed => $"The keyboard hook is unavailable. {App.CurrentApp.InputStatusError ?? "No error details were reported."}",
-            _ => "The keyboard engine is stopped."
-        };
+        DiagnosticStatusText.Text = GetInputStatusLabel(status);
     }
 
     private static string GetInputStatusLabel(InputEngineStatus status) => status switch
@@ -277,6 +344,4 @@ public partial class MainWindow : FluentWindow
         InputEngineStatus.Failed => "Needs attention",
         _ => "Stopped"
     };
-
-    private sealed record TriggerOption(TriggerKey Key, string Label);
 }
