@@ -142,13 +142,18 @@ function Invoke-Setup {
 }
 
 function Invoke-Uninstaller {
-    $process = Start-Process -FilePath $uninstallerPath `
-        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') `
-        -Wait `
-        -PassThru
+    $logPath = Join-Path $workDirectory 'inno-uninstall.log'
+    $arguments = @(
+        '/VERYSILENT'
+        '/SUPPRESSMSGBOXES'
+        '/NORESTART'
+        '/SP-'
+        ('/LOG="{0}"' -f $logPath)
+    )
 
+    $process = Start-Process -FilePath $uninstallerPath -ArgumentList $arguments -Wait -PassThru
     if ($process.ExitCode -ne 0) {
-        throw "Uninstall failed with exit code $($process.ExitCode)."
+        throw "Uninstall failed with exit code $($process.ExitCode). Inno Setup log tail:`n$((Get-LogTail $logPath))"
     }
 }
 
@@ -157,10 +162,9 @@ function Build-Installer {
 
     Write-Step "Building installer $Version"
     # Out-Host keeps the publish log visible without letting it become the return value.
+    # package-installer.ps1 signals failure by throwing, which propagates here, so the
+    # Assert-FileExists below is the only guard this needs.
     & $packageScriptPath -Version $Version | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "scripts/package-installer.ps1 failed with exit code $LASTEXITCODE."
-    }
 
     $setupPath = Join-Path $installerDirectory "Hyperkey-Setup-$Version.exe"
     Assert-FileExists -Path $setupPath -Message "Installer $Version was produced"
@@ -344,38 +348,56 @@ try {
     Write-Host "`nInstaller verification passed." -ForegroundColor Green
 }
 finally {
+    $verificationFailed = $true
+
     Get-Process -Name 'Hyperkey.App' -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 
     if ($startedVerification) {
-        if (Test-Path -LiteralPath $installDirectory) {
-            Remove-Item -LiteralPath $installDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        # Cleanup runs guarded. A throw here would replace the real "Verification failed"
+        # exception with a confusing cleanup error and hide which check actually broke.
+        try {
+            if (Test-Path -LiteralPath $installDirectory) {
+                Remove-Item -LiteralPath $installDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            }
 
-        # A failed run can leave the shortcut behind if it never reached the uninstaller.
-        if (-not $hadExistingShortcut) {
-            Get-ChildItem -LiteralPath (Split-Path -Parent $startMenuShortcut) -Filter 'Hyperkey*.lnk' -ErrorAction SilentlyContinue |
-                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-        }
+            # A failed run can leave the shortcut behind if it never reached the uninstaller.
+            if (-not $hadExistingShortcut) {
+                Get-ChildItem -LiteralPath (Split-Path -Parent $startMenuShortcut) -Filter 'Hyperkey*.lnk' -ErrorAction SilentlyContinue |
+                    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
 
-        # The uninstaller deletes the settings directory, so put the machine back the
-        # way it was found before reporting anything.
-        if (Test-Path -LiteralPath $appDataDirectory) {
-            Remove-Item -LiteralPath $appDataDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        }
+            # The uninstaller deletes the settings directory, so put the machine back the
+            # way it was found before reporting anything.
+            if (Test-Path -LiteralPath $appDataDirectory) {
+                Remove-Item -LiteralPath $appDataDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            }
 
-        if ($hadExistingAppData) {
-            Copy-Item -LiteralPath $backupDirectory -Destination $appDataDirectory -Recurse -Force
-        }
+            if ($hadExistingAppData) {
+                Copy-Item -LiteralPath $backupDirectory -Destination $appDataDirectory -Recurse -Force
+            }
 
-        if ($null -eq $savedStartupRegistration) {
-            Remove-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -ErrorAction SilentlyContinue
+            if ($null -eq $savedStartupRegistration) {
+                Remove-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -ErrorAction SilentlyContinue
+            }
+            else {
+                New-Item -Path $runKeyPath -Force | Out-Null
+                Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value $savedStartupRegistration
+            }
+
+            $verificationFailed = $false
         }
-        else {
-            New-Item -Path $runKeyPath -Force | Out-Null
-            Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value $savedStartupRegistration
+        catch {
+            Write-Host "    warn  cleanup could not fully restore this machine: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "    warn  your previous settings are backed up at $backupDirectory" -ForegroundColor Yellow
         }
     }
 
-    Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    if ($verificationFailed) {
+        # Keep the Inno logs and the settings backup for diagnosis and recovery.
+        Write-Host "    logs and settings backup kept at $workDirectory" -ForegroundColor Yellow
+    }
+    else {
+        Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

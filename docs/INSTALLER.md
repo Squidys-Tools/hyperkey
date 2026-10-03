@@ -38,9 +38,21 @@ backs up `%LOCALAPPDATA%\Hyperkey` and the launch-at-login value before it start
 when it finishes, so it is safe to run on a development machine. Pass `-SkipUpgrade` to skip the
 second installer build while iterating locally.
 
+If a run is interrupted part-way through — Ctrl+C, a crash, or a reboot — the uninstaller may already
+have deleted your settings. The backup is the only copy, so copy it back:
+
+```text
+%TEMP%\hyperkey-installer-verification\appdata-backup\settings.json
+  -> %LOCALAPPDATA%\Hyperkey\settings.json
+```
+
+The launch-at-login value is restored from the backup directory only if the run reached that step, so
+re-enable "Launch at login" in settings afterwards if the value is missing.
+
 CI runs this as its own job on every pull request.
 
 ## Current status
 
-Clean install, upgrade, uninstall, and startup behavior are verified automatically. Code signing is
-still outstanding, so Windows may show a SmartScreen warning on first run.
+Clean install, upgrade, uninstall, and startup behavior are verified automatically. Code signing was
+deliberately dropped, so Windows may show a SmartScreen warning on first run; the README explains how
+to proceed.
