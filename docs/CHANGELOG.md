@@ -57,12 +57,17 @@ This document tracks the implementation phases and current project status.
 - [x] Packaging script (`scripts/package-installer.ps1`)
 - [x] Per-user startup registration (native shell)
 - [x] Rebindable trigger key (any normal keyboard key; settings schema v2)
-- [ ] Installer validation and testing
-- [ ] Code signing
+- [x] Installer validation and testing (`scripts/verify-installer.ps1`, run in CI)
+- [x] Clean install, upgrade, uninstall, and startup testing (same check)
+- [ ] Code signing (blocked on a certificate)
 - [ ] Application icon and tray assets (deferred)
-- [ ] Clean install, upgrade, uninstall, and startup testing
 
 **Exit condition:** A new Windows user can install, enable, test, and remove the app without opening a terminal.
+
+The exit condition is now covered by an automated check rather than a manual pass. `scripts/verify-installer.ps1`
+builds the setup, installs it silently, launches the app, proves the single-instance guard, upgrades
+over the existing install, and asserts the uninstaller leaves nothing behind. CI runs it on every
+pull request.
 
 ---
 
@@ -90,5 +95,6 @@ This document tracks the implementation phases and current project status.
 
 | Version | Date | Phase | Notes |
 |---------|------|-------|-------|
+| Unreleased | - | 4 | Rebindable trigger key, main window redesign with theme tokens, press-to-rebind button, key-up synthesis for released modifiers, automated installer verification |
 | 0.1.1 | - | 4 | Lazy-load settings window for lower tray-idle memory usage |
 | 0.1.0 | - | 4 | Initial MVP, phases 1-3 complete |

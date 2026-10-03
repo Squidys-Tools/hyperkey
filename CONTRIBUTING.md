@@ -12,7 +12,7 @@ src/Hyperkey.Input    Keyboard hook thread, trigger state machine glue, SendInpu
 src/Hyperkey.Core     Pure settings model and input transition logic, no Win32 or UI dependencies
 tests/                Dependency-free test runner for Hyperkey.Core
 installer/            Inno Setup definition
-scripts/              Packaging script
+scripts/              Packaging and installer verification scripts
 docs/                 Design documents
 ```
 
@@ -57,7 +57,7 @@ These invariants are easy to break and expensive to lose:
 
 ## CI and releases
 
-- Pushes to `main` run `.github/workflows/ci.yml`: restore, x64 Release build, core tests.
+- Pushes to `main` and pull requests run `.github/workflows/ci.yml`: restore, x64 Release build, core tests, and a job that installs, upgrades, and uninstalls the real installer.
 - Tagging `v*` runs `.github/workflows/release.yml`: it publishes the app, builds the installer, and attaches `Hyperkey-Setup-*.exe` to a GitHub release.
 
 To build the installer locally:
@@ -67,6 +67,14 @@ To build the installer locally:
 ```
 
 That writes the publish output to `publish\win-x64` and the installer to `publish\installer`. The version number comes from `Directory.Build.props`; pass `-Version` to override it.
+
+To check what the installer actually does:
+
+```powershell
+.\scripts\verify-installer.ps1
+```
+
+This installs, launches, upgrades, and uninstalls Hyperkey for real. It refuses to run against an existing install or a running Hyperkey instance, and it restores your settings and launch-at-login value when it finishes, so it is safe on a development machine. See [INSTALLER.md](docs/INSTALLER.md) for what it checks.
 
 ## Submitting changes
 

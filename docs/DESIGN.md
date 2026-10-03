@@ -55,7 +55,7 @@ The production settings window should be one vertically scrollable list. It shou
 
 ```text
 Hyperkey
-  Enabled status card
+  Header: title, enabled toggle, and a badge that mirrors the toggle
 
 Keyboard
   Trigger key: any supported key, rebound through the settings window
@@ -64,6 +64,9 @@ Keyboard
 Startup
   Launch at Login
   Launch in tray at startup.
+
+Diagnostics
+  Hook status, restart hook, emergency disable, copy details
 
 About
   Version
@@ -116,7 +119,7 @@ Hyperkey.Core
 └── Pure testable behavior
 ```
 
-Keep `Hyperkey.Core` independent from WinUI and P/Invoke. It should accept normalized key events and return decisions such as suppress, forward, press modifiers, or release modifiers. That gives the input behavior a normal unit-test surface.
+Keep `Hyperkey.Core` independent from WPF and P/Invoke. It should accept normalized key events and return decisions such as suppress, forward, press modifiers, or release modifiers. That gives the input behavior a normal unit-test surface.
 
 ## Input implementation
 
@@ -177,15 +180,18 @@ Start with a versioned JSON file under the current user's local app data directo
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "enabled": true,
   "trigger": "CapsLock",
   "outputModifiers": ["Control", "Alt", "Shift"],
   "launchAtStartup": true,
-  "launchToTray": false,
-  "tapBehavior": "CapsLock"
+  "launchToTray": false
 }
 ```
+
+Schema 1 was the original fixed-trigger format and is still read on load. Schema 2 replaced
+it when the trigger became rebindable; `tapBehavior` is gone because the trigger key now
+replays itself on a tap by definition.
 
 The native implementation should replace stringly typed values with enums or dedicated types. Parse and validate persisted JSON at the boundary, then pass trusted settings into the core engine.
 
@@ -200,7 +206,7 @@ The settings window should:
 - Use Windows light and dark theme resources.
 - Keep a clear enabled or disabled state at the top.
 - Offer compact controls for the trigger key and output modifier combination.
-- Use ordinary WinUI toggles, buttons, and list rows.
+- Use ordinary WPF UI toggles, buttons, and list rows.
 - Scroll as the list grows.
 - Have keyboard-accessible focus order.
 - Avoid tab navigation, a sidebar, or hidden settings pages.
@@ -250,14 +256,21 @@ Exit condition: failures are visible, recoverable, and do not require killing th
 
 ### Phase 4: packaging and polish
 
-- Build a conventional Windows installer with a simple one-line installation path. (Definition and packaging script added; validation remains.)
-- Configure per-user startup registration. (Implemented in the native shell; installer integration remains.)
+- Build a conventional Windows installer with a simple one-line installation path. (Done and verified by `scripts/verify-installer.ps1`.)
+- Configure per-user startup registration. (Implemented in the native shell; the installer writes the Start Menu entry and the uninstaller removes the `Run` value.)
 - Add application icon and tray assets when the final icon is available. (Deferred.)
-- Code-sign the build.
-- Test clean install, upgrade, uninstall, and startup behavior.
+- Code-sign the build. (Blocked on a code-signing certificate.)
+- Test clean install, upgrade, uninstall, and startup behavior. (Automated in CI by `scripts/verify-installer.ps1`.)
 - Keep the elevation limitation and uninstall data-cleanup behavior documented.
 
 Exit condition: a new Windows user can install, enable, test, and remove the app without opening a terminal.
+
+The installer check is automated because the Phase 4 exit condition is a user journey, not a
+unit-testable behavior: it installs the real setup silently, launches the app, proves the
+single-instance guard, upgrades over the existing install, and asserts the uninstaller removes the
+program files, the Start Menu shortcut, the launch-at-login value, and the settings directory. It
+runs as its own CI job so a packaging regression fails a pull request instead of surfacing in a
+user's download.
 
 ## Test plan
 

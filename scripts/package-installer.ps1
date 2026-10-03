@@ -68,6 +68,10 @@ foreach ($programFilesRoot in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
     }
 }
 
+# Inno Setup's per-user install lives under the local app data folder, which is where
+# it lands when a machine-wide install is not available.
+$innoSetupCandidates += Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+
 $innoSetupCandidates = $innoSetupCandidates |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
 

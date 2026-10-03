@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -30,3 +33,24 @@ jobs:
 
       - name: Run core tests
         run: dotnet run --project tests\Hyperkey.Core.Tests\Hyperkey.Core.Tests.csproj --configuration Release --no-build
+
+  installer:
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      # Installs, launches, upgrades, and uninstalls the real per-user setup to
+      # prove the Phase 4 packaging exit condition on every change.
+      - name: Verify installer
+        shell: pwsh
+        run: ./scripts/verify-installer.ps1
