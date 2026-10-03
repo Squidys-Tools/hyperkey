@@ -11,7 +11,7 @@ Hold the trigger key and every other key you press acts as if those modifiers we
 - Hold Caps Lock, press F, and Windows sees Ctrl+Alt+Shift+F.
 - Tap Caps Lock on its own and it still toggles caps like normal.
 
-Your real Ctrl, Alt, and Shift keys keep working exactly as before. Hyperkey adds a layer on top instead of replacing anything.
+Your real Ctrl, Alt, and Shift keys keep working exactly as before. Hyperkey adds a layer on top instead of replacing anything. The generated layer always uses the left-hand Ctrl, Alt, and Shift, so an app that tells left from right will see the left one.
 
 ## Install
 
@@ -28,7 +28,7 @@ Requires Windows 10 version 19041 or newer.
 Settings live in one window, opened from the tray icon:
 
 - **Enabled** turns the whole thing on or off without quitting.
-- **Trigger key** rebinds to any normal key: select Rebind, then press the key. Modifier, system, and extended keys (arrows, Home/End, media keys, …) are rejected. Tapping the trigger on its own still types it like normal.
+- **Trigger key** rebinds to any normal key: select Rebind, then press the key. Modifier, system, and extended keys (arrows, Home/End, media keys, …) are rejected, and Escape cancels rebinding. Tapping the trigger on its own still types it like normal.
 - **Output modifiers** picks which of Ctrl, Alt, or Shift the layer sends. Pick at least one.
 - **Launch at login** starts Hyperkey when you sign in. **Launch to tray** keeps the settings window closed at startup.
 
