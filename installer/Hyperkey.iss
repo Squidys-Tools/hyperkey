@@ -22,6 +22,7 @@ OutputBaseFilename=Hyperkey-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\src\Hyperkey.App\Assets\favicon.ico
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\{#AppExeName}

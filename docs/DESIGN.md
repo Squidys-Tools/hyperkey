@@ -16,12 +16,13 @@ Included:
 
 - Any normal keyboard key as the trigger (letters, digits, function keys,
   punctuation, Caps Lock, Scroll Lock, …). Modifier, system, and
-  extended-scan-code keys are rejected.
+  extended-scan-code keys are rejected. Escape is reserved as the
+  rebind-cancel key.
 - Any non-empty combination of Ctrl, Alt, and Shift as the output modifier layer.
 - Background operation with a tray icon.
 - A single settings window.
 - Enable and disable controls.
-- Native windows compatibility.
+- Works with native Win32 desktop applications.
 - Light and dark system themes.
 - An emergency disable path.
 
@@ -90,7 +91,7 @@ WPF UI owns the settings window theme, layout, controls, and accessibility tree.
 - Low-level keyboard hooks.
 - Synthesized keyboard events.
 - The notification-area tray icon.
-- A message-only window or message loop.
+- A dedicated hook thread with its own message loop.
 - Startup integration and process-level lifecycle work.
 
 Use WPF UI controls first. Keep the UI library focused on the settings and tray surfaces; Win32 interop remains limited to the keyboard hook and input synthesis.
@@ -171,8 +172,16 @@ The implementation must document these limits instead of pretending the hook con
 - Elevated applications are unsupported in this MVP because `SendInput` is subject to UIPI.
 - Games and software using lower-level input paths may not behave like ordinary desktop applications.
 - Other keyboard remappers can interfere with the hook.
+- The generated modifier layer always uses the **left-hand** Ctrl, Alt, and Shift keys. The
+  synthesizer emits fixed left-side scan codes (`0x1D`, `0x38`, `0x2A`) and never virtual keys, so
+  an application that distinguishes left from right sees the left variant.
+- Right Ctrl and Right Alt cannot be used as triggers. Tap replay needs a plain scan code, and
+  right-hand modifiers are extended-scan-code keys, so supporting them means reworking replay
+  rather than widening the allowlist.
 
-The app should expose a diagnostic state for the hook and an emergency disable shortcut that releases every generated modifier before disabling the engine.
+The app exposes a hook status readout and an Emergency disable button in Diagnostics. Emergency
+disable releases every generated modifier before disabling the engine, and deliberately does not
+persist the disabled state, so the next launch is enabled again.
 
 ## Settings model
 
@@ -189,9 +198,11 @@ Start with a versioned JSON file under the current user's local app data directo
 }
 ```
 
-Schema 1 was the original fixed-trigger format and is still read on load. Schema 2 replaced
-it when the trigger became rebindable; `tapBehavior` is gone because the trigger key now
-replays itself on a tap by definition.
+Schema 1 was the original fixed-trigger format and is still read on load. Schema 2 replaced it
+when the trigger became rebindable. `tapBehavior` still exists in schema 2 but is now vestigial:
+it only accepts `CapsLock`, and the legacy value `Undecided` is read as `CapsLock`. Because the
+trigger key replays itself on a tap by definition, the field no longer changes behavior and is kept
+only so existing settings files keep round-tripping. A future schema can drop it.
 
 The native implementation should replace stringly typed values with enums or dedicated types. Parse and validate persisted JSON at the boundary, then pass trusted settings into the core engine.
 
@@ -202,11 +213,11 @@ Settings writes should be atomic enough that a process termination cannot leave 
 The settings window should:
 
 - Open from the tray icon.
-- Remember its last size and position if that proves useful.
+- Open at a fixed 560x700 centered on screen. Window geometry is not persisted; there are no size or position fields in the settings model.
 - Use Windows light and dark theme resources.
 - Keep a clear enabled or disabled state at the top.
 - Offer compact controls for the trigger key and output modifier combination.
-- Use ordinary WPF UI toggles, buttons, and list rows.
+- Use standard controls (CheckBox, ToggleSwitch, Button) with custom keycap-style templates. The toggles stay CheckBox-based so they remain keyboard and screen-reader operable. Layout is dividers and whitespace rather than cards or list rows.
 - Scroll as the list grows.
 - Have keyboard-accessible focus order.
 - Avoid tab navigation, a sidebar, or hidden settings pages.
@@ -221,7 +232,10 @@ Quit
 
 ## Implementation phases
 
-### Phase 1: native shell
+Phases 1-3 are complete; see `CHANGELOG.md` for the shipped state of each. They are recorded here
+as the original plan.
+
+### Phase 1: native shell ✅ Complete
 
 - Create the WPF desktop project and load WPF UI theme resources.
 - Add single-instance handling.
@@ -230,40 +244,46 @@ Quit
 - Add the JSON settings model and persistence.
 - Add light and dark theme resources.
 
-Exit condition: the app launches, opens settings from the tray, saves settings, and exits cleanly.
+Exit condition met: the app launches, opens settings from the tray, saves settings, and exits cleanly.
 
-### Phase 2: input engine
+### Phase 2: input engine ✅ Complete
 
 - Implement the pure trigger state machine.
 - Add the low-level hook thread and message loop.
-- Add Caps Lock suppression.
+- Add suppression and tap replay for the selected trigger key. (Originally scoped to Caps Lock;
+  widened to every supported trigger key when the trigger became rebindable.)
 - Add Ctrl, Alt, and Shift press and release events.
 - Tag and ignore generated events.
 - Add emergency disable and cleanup.
 
-Exit condition: holding either supported trigger with a test key produces the selected modifier shortcut without leaving stuck modifiers.
+Exit condition met: holding the selected trigger with a test key produces the selected modifier
+shortcut without leaving stuck modifiers.
 
-### Phase 3: recovery and diagnostics
+### Phase 3: recovery and diagnostics ✅ Complete
 
 - Handle sleep and resume.
 - Handle workstation lock and unlock.
 - Reconcile modifier state after focus or session changes.
 - Detect hook installation failure.
 - Add a small diagnostics section to settings.
-- Add conflict guidance for common remappers where detection is practical.
+- Add conflict guidance for common remappers where detection is practical. (Shipped as static
+  guidance in Diagnostics and the README. No detection is implemented, and none is planned.)
 
-Exit condition: failures are visible, recoverable, and do not require killing the process.
+Exit condition met: failures are visible, recoverable, and do not require killing the process.
 
-### Phase 4: packaging and polish
+### Phase 4: packaging and polish ✅ Complete
 
-- Build a conventional Windows installer with a simple one-line installation path. (Done and verified by `scripts/verify-installer.ps1`.)
-- Configure per-user startup registration. (Implemented in the native shell; the installer writes the Start Menu entry and the uninstaller removes the `Run` value.)
-- Add application icon and tray assets when the final icon is available. (Deferred.)
-- Code-sign the build. (Blocked on a code-signing certificate.)
-- Test clean install, upgrade, uninstall, and startup behavior. (Automated in CI by `scripts/verify-installer.ps1`.)
+- Build a conventional Windows installer with a simple one-line installation path. Verified by `scripts/verify-installer.ps1`.
+- Configure per-user startup registration. Implemented in the native shell; the installer writes the Start Menu entry and the uninstaller removes the `Run` value.
+- Apply the application icon to the setup, the installed executable, the settings window, and the tray. Done. The icon stops at 48 px, so adding 64 px and 256 px frames is future artwork, not future wiring.
+- Test clean install, upgrade, uninstall, and startup behavior. Automated in CI by `scripts/verify-installer.ps1`.
 - Keep the elevation limitation and uninstall data-cleanup behavior documented.
 
-Exit condition: a new Windows user can install, enable, test, and remove the app without opening a terminal.
+Exit condition met: a new Windows user can install, enable, test, and remove the app without opening a terminal.
+
+Code signing was considered and deliberately dropped. A certificate was not worth buying for a
+free utility, so Windows may show a SmartScreen warning on first run and the README tells users how
+to proceed. This is a decision, not a blocked item.
 
 The installer check is automated because the Phase 4 exit condition is a user journey, not a
 unit-testable behavior: it installs the real setup silently, launches the app, proves the
@@ -285,7 +305,7 @@ user's download.
 
 ### Recovery
 
-- Release Caps Lock while the target app changes.
+- Release the trigger key while the target app changes.
 - Lock and unlock Windows while Hyperkey is active.
 - Sleep and resume while Hyperkey is active.
 - Quit the app while modifiers are active.
@@ -311,14 +331,15 @@ user's download.
 - Light and dark themes remain readable.
 - Disabled and error states are distinguishable.
 
-## Open decisions
+## Resolved design decisions
 
-These should be resolved before the implementation leaves the shell phase:
+These were open during the shell phase and have since been settled. They are recorded so the
+reasoning is not lost:
 
-1. Should the output modifier order use left-side modifiers only, or preserve the physical side where possible?
-2. The first release will use a conventional Windows installer. Scoop support may be added later through a manifest.
-3. Elevated applications are unsupported in the MVP and should be documented as such.
-4. The final Windows icon treatment is deferred until the icon is supplied.
+1. **Output modifiers use the left-hand keys only.** The synthesizer emits fixed left-side scan codes and no virtual keys, so the physical side of the user's own Ctrl/Alt/Shift is not preserved. Revisit only if an application needs the distinction.
+2. **A conventional Windows installer, not Scoop.** The Inno Setup definition ships; no Scoop manifest exists. A manifest remains a reasonable later addition.
+3. **Elevated applications are unsupported and documented.** The app runs `asInvoker`, so `SendInput` cannot reach a higher-integrity window. Stated in the README, the changelog, and in-app.
+4. **The icon ships as a placeholder.** `Assets/favicon.ico` is applied to the setup executable, the installed executable, the settings window, and the tray. It stops at 48 px; larger frames are artwork, not wiring.
 
 ## Research references
 
