@@ -1,0 +1,16 @@
+[package]
+name = "hyperkey-app"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+hyperkey-core = { path = "../hyperkey-core" }
+hyperkey-input = { path = "../hyperkey-input" }
+iced = "=0.14.0"
+tray-icon = "=0.26.1"
+dirs = "7"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
