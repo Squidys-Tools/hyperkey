@@ -84,17 +84,17 @@ The window should be compact enough to feel like a utility, but the content area
 
 ## Native platform choice
 
-Use C# with WPF and WPF UI.
+Decided 2026-10-29: use Rust with iced for the settings window, and the `windows` crate for Win32 interop. This replaces the earlier C# with WPF and WPF UI choice. The C# implementation ships until the Rust port reaches parity; the Rust port lives in `rust/`.
 
-WPF UI owns the settings window theme, layout, controls, and accessibility tree. Win32 interop owns the parts WPF does not specialize in:
+Iced owns the settings window theme, layout, and controls. Win32 interop owns the parts a UI toolkit does not:
 
 - Low-level keyboard hooks.
 - Synthesized keyboard events.
-- The notification-area tray icon.
+- The notification-area tray icon (via the `tray-icon` crate).
 - A dedicated hook thread with its own message loop.
-- Startup integration and process-level lifecycle work.
+- Startup integration, the single-instance guard, and process-level lifecycle work.
 
-Use WPF UI controls first. Keep the UI library focused on the settings and tray surfaces; Win32 interop remains limited to the keyboard hook and input synthesis.
+Accepted trade-off: iced does not expose a UI Automation tree, so the settings window is not screen-reader operable in this version. The WPF implementation was. Keyboard operation and a logical focus order remain requirements. Revisit this decision if the toolkit gains UI Automation support.
 
 ## Application shape
 
@@ -120,7 +120,7 @@ Hyperkey.Core
 └── Pure testable behavior
 ```
 
-Keep `Hyperkey.Core` independent from WPF and P/Invoke. It should accept normalized key events and return decisions such as suppress, forward, press modifiers, or release modifiers. That gives the input behavior a normal unit-test surface.
+Keep `Hyperkey.Core` independent from the UI toolkit and from Win32 bindings. It should accept normalized key events and return decisions such as suppress, forward, press modifiers, or release modifiers. That gives the input behavior a normal unit-test surface.
 
 ## Input implementation
 
@@ -221,7 +221,7 @@ The settings window should:
 - Use Windows light and dark theme resources.
 - Keep a clear enabled or disabled state at the top.
 - Offer compact controls for the trigger key and output modifier combination.
-- Use standard controls (CheckBox, ToggleSwitch, Button) with custom keycap-style templates. The toggles stay CheckBox-based so they remain keyboard and screen-reader operable. Layout is dividers and whitespace rather than cards or list rows.
+- Use toolkit controls (toggler, checkbox, button, pick list) with keycap-style styling. Toggles must stay keyboard operable. Screen-reader operation is not a requirement under the iced decision above. Layout is dividers and whitespace rather than cards or list rows.
 - Scroll as the list grows.
 - Have keyboard-accessible focus order.
 - Avoid tab navigation, a sidebar, or hidden settings pages.
