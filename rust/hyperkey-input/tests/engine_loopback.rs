@@ -14,19 +14,18 @@ use hyperkey_input::engine::InputEngine;
 use hyperkey_input::synth::SYNTHETIC_INPUT_TAG;
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, PM_REMOVE, PeekMessageW,
-    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN,
+    WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 const TRIGGER_CODE: u16 = 0x85; // F22.
@@ -34,12 +33,32 @@ const CHORD_CODE: u16 = 0x86; // F23.
 
 static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static DONE: AtomicBool = AtomicBool::new(false);
-static MAIN_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static DISABLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static DISABLE_DONE: AtomicBool = AtomicBool::new(false);
 static OBSERVER_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Both ignored tests inject input into the same desktop and share the log
+/// statics, so they can never run concurrently even under a parallel harness.
+static SERIAL: Mutex<()> = Mutex::new(());
 
 #[test]
 #[ignore]
 fn generalized_trigger_works_end_to_end_on_the_real_hook() {
+    let _serial = SERIAL.lock().unwrap();
+    run_loopback(sender_main, assert_log_sequence)
+}
+
+#[test]
+#[ignore]
+fn disable_mid_chord_releases_held_modifiers() {
+    let _serial = SERIAL.lock().unwrap();
+    run_loopback(disable_sender_main, assert_disable_log_sequence)
+}
+
+fn run_loopback(
+    sender_main: fn(),
+    assert: fn(&[String]) -> Result<(), String>,
+) {
     let trigger = TriggerKey::try_create(TRIGGER_CODE)
         .expect("F22 must be a supported trigger for the loopback test.");
     let modifiers = vec![
@@ -53,6 +72,8 @@ fn generalized_trigger_works_end_to_end_on_the_real_hook() {
         let mut log = LOG.lock().unwrap();
         log.clear();
         DONE.store(false, Ordering::SeqCst);
+        DISABLE_REQUESTED.store(false, Ordering::SeqCst);
+        DISABLE_DONE.store(false, Ordering::SeqCst);
     }
 
     // Windows calls low-level hooks in reverse installation order (most
@@ -61,7 +82,6 @@ fn generalized_trigger_works_end_to_end_on_the_real_hook() {
     // suppresses never reaches this observer.
     // SAFETY: FFI calls; the hook is installed on this test thread and pumped
     // by pump_messages below; the module handle is this test binary.
-    MAIN_THREAD_ID.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
     let module = unsafe { GetModuleHandleW(None) };
     let observer = unsafe {
         SetWindowsHookExW(
@@ -83,7 +103,7 @@ fn generalized_trigger_works_end_to_end_on_the_real_hook() {
             .name("loopback sender".to_string())
             .spawn(sender_main)
             .map_err(|error| format!("The loopback sender could not start. {error}"))?;
-        pump_messages(Duration::from_secs(25))?;
+        pump_messages(&engine, Duration::from_secs(25))?;
         let deadline = Instant::now() + Duration::from_secs(5);
         while !sender.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -93,7 +113,8 @@ fn generalized_trigger_works_end_to_end_on_the_real_hook() {
         }
         let _ = sender.join();
 
-        assert_log_sequence()
+        let log = LOG.lock().unwrap().clone();
+        assert(&log)
     }));
     let failure = match run_result {
         Ok(result) => result.err(),
@@ -117,7 +138,17 @@ fn generalized_trigger_works_end_to_end_on_the_real_hook() {
     }
 }
 
+/// Marks the sender as finished even if it panics partway through.
+struct DoneOnDrop;
+
+impl Drop for DoneOnDrop {
+    fn drop(&mut self) {
+        DONE.store(true, Ordering::SeqCst);
+    }
+}
+
 fn sender_main() {
+    let _done = DoneOnDrop;
     std::thread::sleep(Duration::from_millis(800));
 
     // Tap: raw events must vanish, replayed (tagged) pair must arrive.
@@ -137,17 +168,25 @@ fn sender_main() {
     send_key(TRIGGER_CODE, true);
     std::thread::sleep(Duration::from_millis(400));
     record_async_state("post");
+}
 
-    DONE.store(true, Ordering::SeqCst);
-    // SAFETY: FFI call; wakes the pumping test thread.
-    let _ = unsafe {
-        PostThreadMessageW(
-            MAIN_THREAD_ID.load(Ordering::SeqCst),
-            WM_QUIT,
-            WPARAM(0),
-            LPARAM(0),
-        )
-    };
+fn disable_sender_main() {
+    let _done = DoneOnDrop;
+    std::thread::sleep(Duration::from_millis(800));
+
+    // Start a chord but never release the trigger: the engine is
+    // stopped mid-chord instead, which must drop the held modifiers.
+    send_key(TRIGGER_CODE, false);
+    std::thread::sleep(Duration::from_millis(350));
+    send_key(CHORD_CODE, false);
+    std::thread::sleep(Duration::from_millis(400));
+    record_async_state("mid");
+
+    DISABLE_REQUESTED.store(true, Ordering::SeqCst);
+
+    std::thread::sleep(Duration::from_millis(1500));
+    record_async_state("post");
+    std::thread::sleep(Duration::from_millis(200));
 }
 
 fn record_async_state(phase: &str) {
@@ -164,8 +203,7 @@ fn record_async_state(phase: &str) {
     ));
 }
 
-fn assert_log_sequence() -> Result<(), String> {
-    let log = LOG.lock().unwrap().clone();
+fn assert_log_sequence(log: &[String]) -> Result<(), String> {
     let require = |condition: bool, message: &str| -> Result<(), String> {
         if condition {
             Ok(())
@@ -228,7 +266,42 @@ fn assert_log_sequence() -> Result<(), String> {
     )
 }
 
-fn pump_messages(timeout: Duration) -> Result<(), String> {
+fn assert_disable_log_sequence(log: &[String]) -> Result<(), String> {
+    let require = |condition: bool, message: &str| -> Result<(), String> {
+        if condition {
+            Ok(())
+        } else {
+            Err(format!("{message}\nObserved: {}", log.join(" | ")))
+        }
+    };
+
+    // The trigger down was suppressed and the chord key forwarded.
+    require(
+        !log.iter()
+            .any(|line| line == &format!("EVT:DOWN:0x{TRIGGER_CODE:02X}:R")),
+        "Raw F22 key-down reached the observer; the trigger was not suppressed.",
+    )?;
+    require(
+        log.iter()
+            .any(|line| line == &format!("EVT:DOWN:0x{CHORD_CODE:02X}:R")),
+        "Expected the raw F23 key-down to be forwarded during the chord.",
+    )?;
+
+    // Modifiers were physically held mid-chord, and stopping the engine
+    // mid-chord released them even though the trigger stayed held.
+    let mid = log.iter().find(|line| line.starts_with("ASYNC-mid:"));
+    let post = log.iter().find(|line| line.starts_with("ASYNC-post:"));
+    require(
+        mid.map(String::as_str) == Some("ASYNC-mid:Ctrl=True:Alt=True:Shift=True"),
+        "Expected Ctrl+Alt+Shift to be physically held mid-chord.",
+    )?;
+    require(
+        post.map(String::as_str) == Some("ASYNC-post:Ctrl=False:Alt=False:Shift=False"),
+        "Expected all output modifiers to be released when the engine was disabled mid-chord.",
+    )
+}
+
+fn pump_messages(engine: &InputEngine, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let mut drained = false;
@@ -236,10 +309,11 @@ fn pump_messages(timeout: Duration) -> Result<(), String> {
         // SAFETY: FFI message pump on this test thread's queue.
         while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
             drained = true;
-            if message.message == WM_QUIT {
-                return Ok(());
-            }
 
+            // No WM_QUIT fast-path on purpose: a quit message posted by a
+            // previous run can sit in this thread's queue when it starts,
+            // and treating it as "done" would end the pump before the hook
+            // ever sees an event. Dispatch everything; wait only on DONE.
             // SAFETY: FFI dispatch for the message just retrieved.
             unsafe {
                 let _ = TranslateMessage(&message);
@@ -248,8 +322,21 @@ fn pump_messages(timeout: Duration) -> Result<(), String> {
             message = MSG::default();
         }
 
-        if DONE.load(Ordering::SeqCst) && !drained {
+        let mut request_disable = false;
+        if DISABLE_REQUESTED.load(Ordering::SeqCst) && !DISABLE_DONE.load(Ordering::SeqCst) {
+            DISABLE_DONE.store(true, Ordering::SeqCst);
+            request_disable = true;
+        }
+
+        if DONE.load(Ordering::SeqCst) && !drained && !request_disable {
             return Ok(());
+        }
+
+        // Stop the engine mid-chord from the pump thread so its hook can
+        // shut down cleanly while the sender keeps holding the keys.
+        if request_disable {
+            engine.stop();
+            continue;
         }
 
         std::thread::sleep(Duration::from_millis(20));

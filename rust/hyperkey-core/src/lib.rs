@@ -4,3 +4,4 @@ pub mod json;
 pub mod keys;
 pub mod machine;
 pub mod settings;
+pub mod watchdog;
