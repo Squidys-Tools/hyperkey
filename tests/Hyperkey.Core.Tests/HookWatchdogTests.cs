@@ -19,13 +19,13 @@ internal static class HookWatchdogTests
 
     public static void DeadHookRequestsReinstallUntilHeartbeatResumes()
     {
-        var watchdog = new HookWatchdog(DeadAfter, startTicks: 0);
+        var watchdog = new HookWatchdog(deadAfterMilliseconds: 250, startTicks: 0);
 
-        AssertEqual(HookWatchdogAction.SendProbe, watchdog.Tick(50));
-        AssertEqual(HookWatchdogAction.ReinstallHook, watchdog.Tick(100));
-        AssertEqual(HookWatchdogAction.ReinstallHook, watchdog.Tick(200));
-        watchdog.Heartbeat(250);
-        AssertEqual(HookWatchdogAction.SendProbe, watchdog.Tick(300));
+        AssertEqual(HookWatchdogAction.SendProbe, watchdog.Tick(100));
+        AssertEqual(HookWatchdogAction.ReinstallHook, watchdog.Tick(250));
+        AssertEqual(HookWatchdogAction.ReinstallHook, watchdog.Tick(500));
+        watchdog.Heartbeat(600);
+        AssertEqual(HookWatchdogAction.SendProbe, watchdog.Tick(700));
     }
 
     public static void ResetResumesProbingAfterReinstall()

@@ -306,7 +306,11 @@ public sealed class InputEngine : IDisposable
 
                 if (message.Message == WmReinstallHook)
                 {
-                    ReinstallHook();
+                    if (!ReinstallHook())
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -444,6 +448,11 @@ public sealed class InputEngine : IDisposable
 
         lock (_lifecycleGate)
         {
+            if (Volatile.Read(ref _disposed) || _stopRequested)
+            {
+                return;
+            }
+
             _watchdog = new HookWatchdog(WatchdogDeadAfterMilliseconds, Environment.TickCount64);
             _watchdogTimer = new System.Threading.Timer(
                 WatchdogTick,
@@ -499,11 +508,20 @@ public sealed class InputEngine : IDisposable
         }
     }
 
-    private void ReinstallHook()
+    private bool ReinstallHook()
     {
-        if (_stopRequested)
+        var watchdog = Volatile.Read(ref _watchdog);
+        if (_stopRequested || watchdog is null)
         {
-            return;
+            return true;
+        }
+
+        // Reinstall requests can pile up while the hook thread is stalled. A
+        // heartbeat that arrived after this message was posted proves the hook
+        // is alive again, so a queued leftover has nothing to repair.
+        if (watchdog.Tick(Environment.TickCount64) == HookWatchdogAction.SendProbe)
+        {
+            return true;
         }
 
         if (_hookHandle != IntPtr.Zero)
@@ -526,12 +544,13 @@ public sealed class InputEngine : IDisposable
                 Marshal.GetLastWin32Error(),
                 "The low-level keyboard hook could not be reinstalled.").Message;
             SetStatus(InputEngineStatus.Failed, error);
-            return;
+            return false;
         }
 
-        Volatile.Read(ref _watchdog)?.Reset(Environment.TickCount64);
+        watchdog.Reset(Environment.TickCount64);
         RecordRecovery(
             $"The keyboard hook was reinstalled automatically at {DateTime.Now:T} after it stopped responding.");
+        return true;
     }
 
     private void RecordRecovery(string message)
