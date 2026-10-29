@@ -58,7 +58,18 @@ public sealed class SettingsStore
         var parseResult = SettingsJson.Parse(json);
         if (parseResult.UsedDefaults)
         {
-            return RecoverUnreadableFile($"The settings file could not be read: {parseResult.Error}");
+            var reason = $"The settings file could not be read: {parseResult.Error}";
+            if (!parseResult.FileCorrupt)
+            {
+                // A readable file (for example, one from a newer schema version)
+                // stays in place so its values can still be recovered later.
+                return new SettingsLoadResult(
+                    HyperkeySettings.Defaults,
+                    UsedDefaults: true,
+                    Message: $"Hyperkey loaded safe defaults. {reason}");
+            }
+
+            return RecoverUnreadableFile(reason);
         }
 
         return new SettingsLoadResult(
@@ -76,8 +87,8 @@ public sealed class SettingsStore
             HyperkeySettings.Defaults,
             UsedDefaults: true,
             Message: preserved
-                ? $"{reason} The original file was preserved as settings.json.bak."
-                : reason);
+                ? $"Hyperkey loaded safe defaults. {reason} The original file was preserved as settings.json.bak."
+                : $"Hyperkey loaded safe defaults. {reason}");
     }
 
     private bool TryPreserveAsBackup()

@@ -68,9 +68,7 @@ public partial class MainWindow : FluentWindow
 
             ModifierSelectionHintText.Visibility = Visibility.Visible;
 
-            RecoveryText.Text = recoveryMessage is null
-                ? string.Empty
-                : $"Hyperkey loaded safe defaults. {recoveryMessage}";
+            RecoveryText.Text = recoveryMessage ?? string.Empty;
             RecoveryBanner.Visibility = recoveryMessage is null
                 ? Visibility.Collapsed
                 : Visibility.Visible;

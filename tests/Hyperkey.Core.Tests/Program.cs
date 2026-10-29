@@ -40,6 +40,7 @@ internal static class Program
             SettingsMigrationTests.UnsupportedSchemaVersionFallsBackToDefaults();
             SettingsMigrationTests.CorruptJsonFallsBackToDefaults();
             SettingsMigrationTests.CorruptFileIsPreservedAsBackupAndDefaultsLoad();
+            SettingsMigrationTests.UnsupportedSchemaFileStaysOnDiskAndLoadsDefaults();
             SettingsMigrationTests.SavedSettingsRoundTripAndLeaveNoTempFile();
             SettingsMigrationTests.RepairedFileKeepsOriginalAndReportsMessage();
             EngineLoopback.GeneralizedTriggerWorksEndToEndOnTheRealHook();

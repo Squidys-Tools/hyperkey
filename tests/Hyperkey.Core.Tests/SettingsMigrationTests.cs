@@ -236,6 +236,40 @@ internal static class SettingsMigrationTests
         }
     }
 
+    public static void UnsupportedSchemaFileStaysOnDiskAndLoadsDefaults()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var settingsPath = Path.Combine(directory, "settings.json");
+            const string newerDocument = """
+                {
+                  "schemaVersion": 99,
+                  "enabled": false,
+                  "trigger": "F9",
+                  "outputModifiers": ["Alt"],
+                  "launchAtStartup": false,
+                  "launchToTray": true,
+                  "tapBehavior": "CapsLock"
+                }
+                """;
+            File.WriteAllText(settingsPath, newerDocument);
+            var store = new SettingsStore(directory);
+
+            var result = store.Load();
+
+            AssertEqual(true, result.UsedDefaults);
+            AssertEqual(HyperkeySettings.Defaults, result.Settings);
+            AssertTrue(result.Message is not null, "Expected a recovery message.");
+            AssertEqual(newerDocument, File.ReadAllText(settingsPath));
+            AssertTrue(!File.Exists($"{settingsPath}.bak"), "Expected no backup for a readable file.");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     public static void RepairedFileKeepsOriginalAndReportsMessage()
     {
         var directory = CreateTempDirectory();
