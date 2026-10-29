@@ -16,14 +16,20 @@ public sealed class SettingsStore
 {
     private readonly string _settingsPath;
     private readonly string _temporarySettingsPath;
+    private readonly string _backupSettingsPath;
 
     public SettingsStore()
-    {
-        var appDataDirectory = Path.Combine(
+        : this(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Hyperkey");
-        _settingsPath = Path.Combine(appDataDirectory, "settings.json");
+            "Hyperkey"))
+    {
+    }
+
+    public SettingsStore(string settingsDirectory)
+    {
+        _settingsPath = Path.Combine(settingsDirectory, "settings.json");
         _temporarySettingsPath = $"{_settingsPath}.tmp";
+        _backupSettingsPath = $"{_settingsPath}.bak";
     }
 
     public SettingsLoadResult Load()
@@ -35,30 +41,70 @@ public sealed class SettingsStore
             return new SettingsLoadResult(HyperkeySettings.Defaults, UsedDefaults: false, Message: null);
         }
 
+        string json;
         try
         {
-            var json = File.ReadAllText(_settingsPath);
-            var parseResult = SettingsJson.Parse(json);
-            return new SettingsLoadResult(
-                parseResult.Settings,
-                parseResult.UsedDefaults,
-                parseResult.UsedDefaults
-                    ? $"The settings file could not be read: {parseResult.Error}"
-                    : null);
+            json = File.ReadAllText(_settingsPath);
         }
         catch (IOException exception)
         {
-            return new SettingsLoadResult(
-                HyperkeySettings.Defaults,
-                UsedDefaults: true,
-                Message: $"The settings file could not be read: {exception.Message}");
+            return RecoverUnreadableFile($"The settings file could not be read: {exception.Message}");
         }
         catch (UnauthorizedAccessException exception)
         {
-            return new SettingsLoadResult(
-                HyperkeySettings.Defaults,
-                UsedDefaults: true,
-                Message: $"Hyperkey could not access its settings file: {exception.Message}");
+            return RecoverUnreadableFile($"Hyperkey could not access its settings file: {exception.Message}");
+        }
+
+        var parseResult = SettingsJson.Parse(json);
+        if (parseResult.UsedDefaults)
+        {
+            var reason = $"The settings file could not be read: {parseResult.Error}";
+            if (!parseResult.FileCorrupt)
+            {
+                // A readable file (for example, one from a newer schema version)
+                // stays in place so its values can still be recovered later.
+                return new SettingsLoadResult(
+                    HyperkeySettings.Defaults,
+                    UsedDefaults: true,
+                    Message: $"Hyperkey loaded safe defaults. {reason}");
+            }
+
+            return RecoverUnreadableFile(reason);
+        }
+
+        return new SettingsLoadResult(
+            parseResult.Settings,
+            UsedDefaults: false,
+            Message: parseResult.Repaired
+                ? $"Some settings were invalid and were reset to defaults ({parseResult.Error})."
+                : null);
+    }
+
+    private SettingsLoadResult RecoverUnreadableFile(string reason)
+    {
+        var preserved = TryPreserveAsBackup();
+        return new SettingsLoadResult(
+            HyperkeySettings.Defaults,
+            UsedDefaults: true,
+            Message: preserved
+                ? $"Hyperkey loaded safe defaults. {reason} The original file was preserved as settings.json.bak."
+                : $"Hyperkey loaded safe defaults. {reason}");
+    }
+
+    private bool TryPreserveAsBackup()
+    {
+        try
+        {
+            File.Move(_settingsPath, _backupSettingsPath, overwrite: true);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

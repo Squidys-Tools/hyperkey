@@ -7,6 +7,8 @@ namespace Hyperkey.Core;
 public sealed record SettingsParseResult(
     HyperkeySettings Settings,
     bool UsedDefaults,
+    bool Repaired,
+    bool FileCorrupt,
     string? Error);
 
 public static class SettingsJson
@@ -42,62 +44,89 @@ public static class SettingsJson
             var document = JsonSerializer.Deserialize<PersistedSettings>(json, SerializerOptions)
                 ?? throw new InvalidDataException("The settings document was empty.");
 
-            if (document.SchemaVersion is not (1 or 2))
+            // A missing schemaVersion marks a document written before
+            // versioning existed; it is migrated by validating its fields
+            // against the current schema. Versions newer than this build
+            // still fall back to defaults.
+            var schemaVersion = document.SchemaVersion ?? HyperkeySettings.CurrentSchemaVersion;
+            if (schemaVersion is < 1 or > HyperkeySettings.CurrentSchemaVersion)
             {
-                throw new InvalidDataException($"Unsupported settings schema: {document.SchemaVersion}.");
+                // The document is readable but belongs to a different schema, so
+                // it stays on disk instead of being quarantined: a newer build
+                // can still recover the values it contains.
+                return new SettingsParseResult(
+                    HyperkeySettings.Defaults,
+                    UsedDefaults: true,
+                    Repaired: false,
+                    FileCorrupt: false,
+                    Error: $"Unsupported settings schema: {document.SchemaVersion}.");
             }
 
-            if (document.Enabled is null || document.LaunchAtStartup is null)
-            {
-                throw new InvalidDataException("The settings document is missing a required boolean value.");
-            }
-
-            var trigger = ParseTrigger(document.Trigger);
-            var modifiers = ParseModifiers(document.OutputModifiers);
-            var tapBehavior = ParseTapBehavior(document.TapBehavior);
+            var repairs = new List<string>();
+            var enabled = document.Enabled
+                ?? Repair(repairs, "enabled was reset to its default", HyperkeySettings.Defaults.Enabled);
+            var launchAtStartup = document.LaunchAtStartup
+                ?? Repair(repairs, "launchAtStartup was reset to its default", HyperkeySettings.Defaults.LaunchAtStartup);
+            var trigger = TriggerKey.TryParse(document.Trigger, out var parsedTrigger)
+                ? parsedTrigger
+                : Repair(
+                    repairs,
+                    $"trigger \"{document.Trigger ?? "missing"}\" was reset to {HyperkeySettings.Defaults.Trigger.DisplayLabel}",
+                    HyperkeySettings.Defaults.Trigger);
+            var modifiers = ParseModifiers(document.OutputModifiers, repairs);
+            var tapBehavior = ParseTapBehavior(document.TapBehavior, repairs);
 
             return new SettingsParseResult(
                 HyperkeySettings.Create(
-                    document.Enabled.Value,
+                    enabled,
                     trigger,
                     modifiers,
-                    document.LaunchAtStartup.Value,
-                    document.LaunchToTray ?? false,
+                    launchAtStartup,
+                    document.LaunchToTray ?? HyperkeySettings.Defaults.LaunchToTray,
                     tapBehavior,
-                    document.SchemaVersion.Value),
+                    schemaVersion),
                 UsedDefaults: false,
-                Error: null);
+                Repaired: repairs.Count > 0,
+                FileCorrupt: false,
+                Error: repairs.Count > 0 ? string.Join("; ", repairs) : null);
         }
         catch (Exception exception) when (exception is JsonException or InvalidDataException or ArgumentException or NotSupportedException)
         {
             return new SettingsParseResult(
                 HyperkeySettings.Defaults,
                 UsedDefaults: true,
+                Repaired: false,
+                FileCorrupt: true,
                 Error: exception.Message);
         }
     }
 
-    private static TriggerKey ParseTrigger(string? value) =>
-        TriggerKey.TryParse(value, out var trigger)
-            ? trigger
-            : throw new InvalidDataException($"Unsupported trigger key: {value ?? "missing"}.");
-
-    private static TapBehavior ParseTapBehavior(string? value) => value switch
+    private static T Repair<T>(ICollection<string> repairs, string description, T fallback)
     {
+        repairs.Add(description);
+        return fallback;
+    }
+
+    private static TapBehavior ParseTapBehavior(string? value, ICollection<string> repairs) => value switch
+    {
+        // Documents written before the field existed are allowed to omit it.
+        null => TapBehavior.CapsLock,
         not null when string.Equals(value, "CapsLock", StringComparison.OrdinalIgnoreCase) => TapBehavior.CapsLock,
         // Settings created before tap behavior was implemented used this placeholder.
         not null when string.Equals(value, "Undecided", StringComparison.OrdinalIgnoreCase) => TapBehavior.CapsLock,
-        _ => throw new InvalidDataException($"Unsupported tap behavior: {value ?? "missing"}.")
+        _ => Repair(repairs, $"tap behavior \"{value}\" was reset to Caps Lock", TapBehavior.CapsLock)
     };
 
-    private static ImmutableArray<OutputModifier> ParseModifiers(string[]? values)
+    private static ImmutableArray<OutputModifier> ParseModifiers(string[]? values, ICollection<string> repairs)
     {
-        if (values is null || values.Length is < 1 or > 3)
+        const string resetMessage = "output modifiers were reset to their defaults";
+        if (values is null || values.Length == 0)
         {
-            throw new InvalidDataException("The settings document must contain one to three output modifiers.");
+            return Repair(repairs, resetMessage, HyperkeySettings.Defaults.OutputModifiers);
         }
 
         var parsed = ImmutableArray.CreateBuilder<OutputModifier>(values.Length);
+        var droppedInvalid = false;
         foreach (var value in values)
         {
             var modifier = value switch
@@ -105,15 +134,26 @@ public static class SettingsJson
                 not null when string.Equals(value, "Control", StringComparison.OrdinalIgnoreCase) => OutputModifier.Control,
                 not null when string.Equals(value, "Alt", StringComparison.OrdinalIgnoreCase) => OutputModifier.Alt,
                 not null when string.Equals(value, "Shift", StringComparison.OrdinalIgnoreCase) => OutputModifier.Shift,
-                _ => throw new InvalidDataException($"Unsupported output modifier: {value ?? "missing"}.")
+                _ => (OutputModifier?)null
             };
 
-            if (parsed.Contains(modifier))
+            if (modifier is null || parsed.Contains(modifier.Value))
             {
-                throw new InvalidDataException("The settings document contains duplicate output modifiers.");
+                droppedInvalid = true;
+                continue;
             }
 
-            parsed.Add(modifier);
+            parsed.Add(modifier.Value);
+        }
+
+        if (parsed.Count == 0)
+        {
+            return Repair(repairs, resetMessage, HyperkeySettings.Defaults.OutputModifiers);
+        }
+
+        if (droppedInvalid)
+        {
+            repairs.Add("unknown or duplicate output modifiers were dropped");
         }
 
         return parsed.ToImmutable();

@@ -108,6 +108,6 @@ a frame by DPI.
 
 | Version | Date | Phase | Notes |
 |---------|------|-------|-------|
-| Unreleased | - | 4 | Rebindable trigger key, main window redesign with theme tokens, press-to-rebind button, key-up synthesis for released modifiers, automated installer verification |
+| Unreleased | - | 4 | Rebindable trigger key, main window redesign with theme tokens, press-to-rebind button, key-up synthesis for released modifiers, automated installer verification, resilient settings loading (unversioned-file migration, per-value validation, corrupt-file backup to settings.json.bak) |
 | 0.1.1 | - | 4 | Lazy-load settings window for lower tray-idle memory usage |
 | 0.1.0 | - | 4 | Initial MVP, phases 1-3 complete |
