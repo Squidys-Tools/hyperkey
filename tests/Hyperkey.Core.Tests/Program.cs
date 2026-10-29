@@ -31,6 +31,10 @@ internal static class Program
             TriggerWireNamesRoundTrip();
             LegacySchemaVersionOneStillLoads();
             UnknownTriggerNameFallsBackToDefaults();
+            HookWatchdogTests.ProbesWhileHeartbeatsArrive();
+            HookWatchdogTests.DeadHookRequestsReinstallUntilHeartbeatResumes();
+            HookWatchdogTests.ResetResumesProbingAfterReinstall();
+            HookWatchdogTests.HeartbeatBoundaryIsExact();
             EngineLoopback.GeneralizedTriggerWorksEndToEndOnTheRealHook();
 
             Console.WriteLine("Hyperkey.Core.Tests passed.");

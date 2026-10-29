@@ -33,6 +33,7 @@ public partial class App : Application
             HyperkeySettings.Defaults.Trigger,
             HyperkeySettings.Defaults.OutputModifiers);
         _inputEngine.StatusChanged += OnInputEngineStatusChanged;
+        _inputEngine.HookRecovered += OnHookRecovered;
         _singleInstance = new SingleInstanceService();
         if (!_singleInstance.TryAcquire())
         {
@@ -57,6 +58,7 @@ public partial class App : Application
         $"Output modifiers: {string.Join(", ", _settings.OutputModifiers)}",
         $"Input status: {_inputEngine.Status}",
         $"Input status error: {InputStatusError ?? "None"}",
+        $"Last automatic hook recovery: {_inputEngine.LastRecoveryMessage ?? "None"}",
         $"Launch at login: {_settings.LaunchAtStartup}",
         $"Launch to tray: {_settings.LaunchToTray}",
         $"Diagnostic message: {DiagnosticMessage ?? "None"}",
@@ -112,6 +114,7 @@ public partial class App : Application
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;
+        _inputEngine.HookRecovered -= OnHookRecovered;
         _trayIcon?.Dispose();
         _inputEngine.EmergencyDisable();
         _inputEngine.Dispose();
@@ -341,6 +344,20 @@ public partial class App : Application
         _isQuitting = true;
         _window?.CloseForExit();
         Shutdown();
+    }
+
+    private void OnHookRecovered(string message)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_isQuitting)
+            {
+                return;
+            }
+
+            _diagnosticMessage = message;
+            RefreshUi();
+        }));
     }
 
     private void OnInputEngineStatusChanged(InputEngineStatus status, string? error)

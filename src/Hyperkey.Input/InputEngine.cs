@@ -22,7 +22,15 @@ public sealed class InputEngine : IDisposable
     private const uint WmSysKeyDown = 0x0104;
     private const uint WmSysKeyUp = 0x0105;
     private const uint WmQuit = 0x0012;
+    private const uint WmUser = 0x0400;
+    private const uint WmReinstallHook = WmUser + 0x2A;
     private const uint PmNoRemove = 0x0000;
+    private const int WatchdogIntervalMilliseconds = 5000;
+    private const int WatchdogDeadAfterMilliseconds = WatchdogIntervalMilliseconds * 3;
+    private const long HeartbeatTagSigned = unchecked((long)ModifierSynthesizer.HeartbeatInputTag);
+
+    private static readonly int ExtraInfoOffset =
+        (int)Marshal.OffsetOf<KBDLLHOOKSTRUCT>(nameof(KBDLLHOOKSTRUCT.ExtraInfo));
 
     private readonly object _lifecycleGate = new();
     private readonly object _stateGate = new();
@@ -38,6 +46,9 @@ public sealed class InputEngine : IDisposable
     private TriggerMachineState _state = TriggerMachineState.Idle;
     private InputEngineStatus _status = InputEngineStatus.Stopped;
     private string? _statusError;
+    private HookWatchdog? _watchdog;
+    private System.Threading.Timer? _watchdogTimer;
+    private string? _lastRecoveryMessage;
     private bool _disposed;
 
     public InputEngine(TriggerKey triggerKey, ImmutableArray<OutputModifier> outputModifiers)
@@ -85,7 +96,20 @@ public sealed class InputEngine : IDisposable
         }
     }
 
+    public string? LastRecoveryMessage
+    {
+        get
+        {
+            lock (_lifecycleGate)
+            {
+                return _lastRecoveryMessage;
+            }
+        }
+    }
+
     public event Action<InputEngineStatus, string?>? StatusChanged;
+
+    public event Action<string>? HookRecovered;
 
     public bool Start()
     {
@@ -133,11 +157,19 @@ public sealed class InputEngine : IDisposable
             return false;
         }
 
-        return Status == InputEngineStatus.Running;
+        if (Status != InputEngineStatus.Running)
+        {
+            return false;
+        }
+
+        StartWatchdog();
+        return true;
     }
 
     public void Stop()
     {
+        StopWatchdog();
+
         Thread? hookThread = null;
         uint hookThreadId = 0;
         var alreadyStopped = false;
@@ -272,6 +304,12 @@ public sealed class InputEngine : IDisposable
                     break;
                 }
 
+                if (message.Message == WmReinstallHook)
+                {
+                    ReinstallHook();
+                    continue;
+                }
+
                 TranslateMessage(ref message);
                 DispatchMessage(ref message);
             }
@@ -313,6 +351,14 @@ public sealed class InputEngine : IDisposable
         if (code < 0)
         {
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
+        }
+
+        Volatile.Read(ref _watchdog)?.Heartbeat(Environment.TickCount64);
+        if (Marshal.ReadIntPtr(lParam, ExtraInfoOffset).ToInt64() == HeartbeatTagSigned)
+        {
+            // A watchdog probe only proves the hook is still alive; suppress it
+            // so the beat never reaches the rest of the system.
+            return new IntPtr(1);
         }
 
         try
@@ -390,6 +436,125 @@ public sealed class InputEngine : IDisposable
         // The physical key-down was already suppressed, so the physical key-up must
         // stay suppressed even if Windows rejects the replay.
         return new IntPtr(1);
+    }
+
+    private void StartWatchdog()
+    {
+        StopWatchdog();
+
+        lock (_lifecycleGate)
+        {
+            _watchdog = new HookWatchdog(WatchdogDeadAfterMilliseconds, Environment.TickCount64);
+            _watchdogTimer = new System.Threading.Timer(
+                WatchdogTick,
+                null,
+                WatchdogIntervalMilliseconds,
+                WatchdogIntervalMilliseconds);
+        }
+    }
+
+    private void StopWatchdog()
+    {
+        System.Threading.Timer? timer;
+        lock (_lifecycleGate)
+        {
+            timer = _watchdogTimer;
+            _watchdogTimer = null;
+            _watchdog = null;
+        }
+
+        timer?.Dispose();
+    }
+
+    private void WatchdogTick(object? state)
+    {
+        if (Volatile.Read(ref _disposed) || _stopRequested || Status != InputEngineStatus.Running)
+        {
+            return;
+        }
+
+        var watchdog = Volatile.Read(ref _watchdog);
+        if (watchdog is null)
+        {
+            return;
+        }
+
+        switch (watchdog.Tick(Environment.TickCount64))
+        {
+            case HookWatchdogAction.SendProbe:
+                _modifierSynthesizer.TrySendHeartbeatProbe();
+                break;
+            case HookWatchdogAction.ReinstallHook:
+                // The hook can only be uninstalled and reinstalled on the thread
+                // that owns the message loop, so hand the work to it.
+                var hookThreadId = Volatile.Read(ref _hookThreadId);
+                var posted = hookThreadId != 0
+                    && PostThreadMessage(hookThreadId, WmReinstallHook, UIntPtr.Zero, IntPtr.Zero);
+                if (!posted)
+                {
+                    watchdog.Reset(Environment.TickCount64);
+                }
+
+                break;
+        }
+    }
+
+    private void ReinstallHook()
+    {
+        if (_stopRequested)
+        {
+            return;
+        }
+
+        if (_hookHandle != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_hookHandle);
+            _hookHandle = IntPtr.Zero;
+        }
+
+        EmergencyDisable();
+
+        _hookHandle = SetWindowsHookEx(
+            WhKeyboardLl,
+            _hookCallback,
+            GetModuleHandle(null),
+            0);
+
+        if (_hookHandle == IntPtr.Zero)
+        {
+            var error = new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                "The low-level keyboard hook could not be reinstalled.").Message;
+            SetStatus(InputEngineStatus.Failed, error);
+            return;
+        }
+
+        Volatile.Read(ref _watchdog)?.Reset(Environment.TickCount64);
+        RecordRecovery(
+            $"The keyboard hook was reinstalled automatically at {DateTime.Now:T} after it stopped responding.");
+    }
+
+    private void RecordRecovery(string message)
+    {
+        lock (_lifecycleGate)
+        {
+            _lastRecoveryMessage = message;
+        }
+
+        var handler = HookRecovered;
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(message);
+        }
+        catch
+        {
+            // A recovery observer must never break the hook thread.
+        }
     }
 
     private void SetStatus(InputEngineStatus status, string? error)
