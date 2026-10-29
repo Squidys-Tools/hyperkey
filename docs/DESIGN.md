@@ -206,7 +206,11 @@ only so existing settings files keep round-tripping. A future schema can drop it
 
 The native implementation should replace stringly typed values with enums or dedicated types. Parse and validate persisted JSON at the boundary, then pass trusted settings into the core engine.
 
-Settings writes should be atomic enough that a process termination cannot leave a half-written file. If parsing fails, load safe defaults and show a recovery message in the settings window.
+Documents without a `schemaVersion` are treated as pre-versioning files and migrated by validating
+their fields against the current schema. Values that fail validation reset to safe defaults
+individually rather than discarding the whole file; the recovery message lists what was reset.
+
+Settings writes should be atomic enough that a process termination cannot leave a half-written file. If parsing fails, load safe defaults and show a recovery message in the settings window. A corrupt or unreadable file is moved aside to `settings.json.bak` so the original is preserved.
 
 ## Settings window behavior
 

@@ -31,6 +31,17 @@ internal static class Program
             TriggerWireNamesRoundTrip();
             LegacySchemaVersionOneStillLoads();
             UnknownTriggerNameFallsBackToDefaults();
+            SettingsMigrationTests.UnversionedDocumentMigratesAndKeepsValues();
+            SettingsMigrationTests.UnversionedDocumentMissingNewerFieldsStillMigrates();
+            SettingsMigrationTests.InvalidTriggerResetsToDefaultAndPreservesOtherValues();
+            SettingsMigrationTests.InvalidOutputModifiersResetToDefaults();
+            SettingsMigrationTests.UnknownTapBehaviorResetsToCapsLock();
+            SettingsMigrationTests.MissingRequiredBooleansResetToDefaults();
+            SettingsMigrationTests.UnsupportedSchemaVersionFallsBackToDefaults();
+            SettingsMigrationTests.CorruptJsonFallsBackToDefaults();
+            SettingsMigrationTests.CorruptFileIsPreservedAsBackupAndDefaultsLoad();
+            SettingsMigrationTests.SavedSettingsRoundTripAndLeaveNoTempFile();
+            SettingsMigrationTests.RepairedFileKeepsOriginalAndReportsMessage();
             EngineLoopback.GeneralizedTriggerWorksEndToEndOnTheRealHook();
 
             Console.WriteLine("Hyperkey.Core.Tests passed.");
@@ -379,8 +390,10 @@ internal static class Program
             .Replace("\"trigger\": \"CapsLock\"", "\"trigger\": \"Win\"", StringComparison.Ordinal);
         var result = SettingsJson.Parse(serialized);
 
-        AssertEqual(true, result.UsedDefaults);
-        AssertEqual(HyperkeySettings.Defaults, result.Settings);
+        AssertEqual(false, result.UsedDefaults);
+        AssertEqual(true, result.Repaired);
+        AssertEqual(HyperkeySettings.Defaults.Trigger, result.Settings.Trigger);
+        AssertSequenceEqual(HyperkeySettings.Defaults.OutputModifiers, result.Settings.OutputModifiers);
     }
 
     private static TriggerTransition Process(TriggerMachineState state, KeyboardEvent input) =>

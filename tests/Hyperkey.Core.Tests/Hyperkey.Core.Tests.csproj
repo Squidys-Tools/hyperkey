@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Hyperkey.Core\Hyperkey.Core.csproj" />
     <ProjectReference Include="..\..\src\Hyperkey.Input\Hyperkey.Input.csproj" />
+    <ProjectReference Include="..\..\src\Hyperkey.App\Hyperkey.App.csproj" />
   </ItemGroup>
 </Project>
 
