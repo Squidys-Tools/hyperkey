@@ -180,9 +180,10 @@ public class SettingsTests
             .Replace("\"trigger\": \"CapsLock\"", "\"trigger\": \"Win\"", StringComparison.Ordinal);
         var result = SettingsJson.Parse(serialized);
 
-        Assert.True(result.UsedDefaults);
-        Assert.Equal(HyperkeySettings.Defaults, result.Settings);
-        Assert.NotNull(result.Error);
+        Assert.False(result.UsedDefaults);
+        Assert.True(result.Repaired);
+        Assert.Equal(HyperkeySettings.Defaults.Trigger, result.Settings.Trigger);
+        Assert.Equal<OutputModifier>(HyperkeySettings.Defaults.OutputModifiers, result.Settings.OutputModifiers);
     }
 
     [Fact]
@@ -215,7 +216,7 @@ public class SettingsTests
     }
 
     [Fact]
-    public void MissingRequiredFieldsFallBackToDefaults()
+    public void MissingRequiredFieldsAreRepaired()
     {
         var withoutEnabled = SettingsJson.Parse("""
             {
@@ -226,7 +227,9 @@ public class SettingsTests
               "tapBehavior": "CapsLock"
             }
             """);
-        Assert.True(withoutEnabled.UsedDefaults);
+        Assert.False(withoutEnabled.UsedDefaults);
+        Assert.True(withoutEnabled.Repaired);
+        Assert.Equal(HyperkeySettings.Defaults.Enabled, withoutEnabled.Settings.Enabled);
 
         var withoutLaunchAtStartup = SettingsJson.Parse("""
             {
@@ -237,37 +240,49 @@ public class SettingsTests
               "tapBehavior": "CapsLock"
             }
             """);
-        Assert.True(withoutLaunchAtStartup.UsedDefaults);
+        Assert.False(withoutLaunchAtStartup.UsedDefaults);
+        Assert.True(withoutLaunchAtStartup.Repaired);
+        Assert.Equal(HyperkeySettings.Defaults.LaunchAtStartup, withoutLaunchAtStartup.Settings.LaunchAtStartup);
     }
 
     [Fact]
-    public void InvalidModifierSetsFallBackToDefaults()
+    public void InvalidModifierSetsAreRepaired()
     {
-        var modifierSets = new[]
-        {
-            "[]",
-            "[\"Control\", \"Alt\", \"Shift\", \"Control\"]",
-            "[\"Control\", \"Control\"]",
-            "[\"Win\"]",
-            "null",
-        };
+        var template = """
+            {
+              "schemaVersion": 2,
+              "enabled": true,
+              "trigger": "CapsLock",
+              "outputModifiers": MODIFIERS,
+              "launchAtStartup": true,
+              "tapBehavior": "CapsLock"
+            }
+            """;
 
-        foreach (var modifiers in modifierSets)
+        foreach (var modifiers in new[] { "[]", "[\"Win\"]", "null" })
         {
-            var result = SettingsJson.Parse($$"""
-                {
-                  "schemaVersion": 2,
-                  "enabled": true,
-                  "trigger": "CapsLock",
-                  "outputModifiers": {{modifiers}},
-                  "launchAtStartup": true,
-                  "tapBehavior": "CapsLock"
-                }
-                """);
+            var result = SettingsJson.Parse(template.Replace("MODIFIERS", modifiers, StringComparison.Ordinal));
 
-            Assert.True(result.UsedDefaults, $"Expected defaults for outputModifiers {modifiers}.");
-            Assert.Equal(HyperkeySettings.Defaults, result.Settings);
+            Assert.False(result.UsedDefaults, $"Expected repair for outputModifiers {modifiers}.");
+            Assert.True(result.Repaired, $"Expected repair for outputModifiers {modifiers}.");
+            Assert.Equal<OutputModifier>(HyperkeySettings.Defaults.OutputModifiers, result.Settings.OutputModifiers);
         }
+
+        var extraDuplicate = SettingsJson.Parse(template.Replace(
+            "MODIFIERS", "[\"Control\", \"Alt\", \"Shift\", \"Control\"]", StringComparison.Ordinal));
+        Assert.False(extraDuplicate.UsedDefaults);
+        Assert.True(extraDuplicate.Repaired);
+        Assert.Equal<OutputModifier>(
+            ImmutableArray.Create(OutputModifier.Control, OutputModifier.Alt, OutputModifier.Shift),
+            extraDuplicate.Settings.OutputModifiers);
+
+        var onlyDuplicates = SettingsJson.Parse(template.Replace(
+            "MODIFIERS", "[\"Control\", \"Control\"]", StringComparison.Ordinal));
+        Assert.False(onlyDuplicates.UsedDefaults);
+        Assert.True(onlyDuplicates.Repaired);
+        Assert.Equal<OutputModifier>(
+            ImmutableArray.Create(OutputModifier.Control),
+            onlyDuplicates.Settings.OutputModifiers);
     }
 
     [Fact]
