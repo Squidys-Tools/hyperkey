@@ -8,6 +8,7 @@ public sealed record SettingsParseResult(
     HyperkeySettings Settings,
     bool UsedDefaults,
     bool Repaired,
+    bool FileCorrupt,
     string? Error);
 
 public static class SettingsJson
@@ -50,7 +51,15 @@ public static class SettingsJson
             var schemaVersion = document.SchemaVersion ?? HyperkeySettings.CurrentSchemaVersion;
             if (schemaVersion is < 1 or > HyperkeySettings.CurrentSchemaVersion)
             {
-                throw new InvalidDataException($"Unsupported settings schema: {document.SchemaVersion}.");
+                // The document is readable but belongs to a different schema, so
+                // it stays on disk instead of being quarantined: a newer build
+                // can still recover the values it contains.
+                return new SettingsParseResult(
+                    HyperkeySettings.Defaults,
+                    UsedDefaults: true,
+                    Repaired: false,
+                    FileCorrupt: false,
+                    Error: $"Unsupported settings schema: {document.SchemaVersion}.");
             }
 
             var repairs = new List<string>();
@@ -78,6 +87,7 @@ public static class SettingsJson
                     schemaVersion),
                 UsedDefaults: false,
                 Repaired: repairs.Count > 0,
+                FileCorrupt: false,
                 Error: repairs.Count > 0 ? string.Join("; ", repairs) : null);
         }
         catch (Exception exception) when (exception is JsonException or InvalidDataException or ArgumentException or NotSupportedException)
@@ -86,6 +96,7 @@ public static class SettingsJson
                 HyperkeySettings.Defaults,
                 UsedDefaults: true,
                 Repaired: false,
+                FileCorrupt: true,
                 Error: exception.Message);
         }
     }
