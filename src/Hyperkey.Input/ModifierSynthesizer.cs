@@ -8,6 +8,7 @@ namespace Hyperkey.Input;
 public sealed class ModifierSynthesizer
 {
     public const ulong SyntheticInputTag = 0x48595045524B4559;
+    public const ulong HeartbeatInputTag = 0x48595045524B4842;
 
     private const uint InputKeyboard = 1;
     private const uint KeyEventFlagKeyUp = 0x0002;
@@ -98,6 +99,37 @@ public sealed class ModifierSynthesizer
             "Windows rejected the trigger-key tap replay.").Message;
         return false;
     }
+
+    /// <summary>
+    /// Injects a tagged F24 key-up that only exists to prove the low-level
+    /// hook is still alive. The hook suppresses it on sight, and a stray
+    /// key-up of F24 is inert if the probe ever leaks past a dead hook.
+    /// </summary>
+    public bool TrySendHeartbeatProbe()
+    {
+        var inputs = new[]
+        {
+            new INPUT
+            {
+                Type = InputKeyboard,
+                Data = new INPUTUNION
+                {
+                    Keyboard = new KEYBDINPUT
+                    {
+                        VirtualKey = HeartbeatVirtualKey,
+                        ScanCode = 0,
+                        Flags = KeyEventFlagKeyUp,
+                        Time = 0,
+                        ExtraInfo = new UIntPtr(HeartbeatInputTag)
+                    }
+                }
+            }
+        };
+
+        return Send(inputs) == inputs.Length;
+    }
+
+    private const ushort HeartbeatVirtualKey = 0x87;
 
     private static INPUT[] CreateInputs(ImmutableArray<OutputModifier> modifiers, bool isKeyUp)
     {
