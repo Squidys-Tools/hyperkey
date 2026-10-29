@@ -33,7 +33,6 @@ internal static class EngineLoopback
     private const uint WmKeyUp = 0x0101;
     private const uint WmSysKeyDown = 0x0104;
     private const uint WmSysKeyUp = 0x0105;
-    private const uint WmQuit = 0x0012;
     private const uint PmRemove = 0x0001;
     private const uint KeyEventFlagKeyUp = 0x0002;
 
@@ -45,7 +44,6 @@ internal static class EngineLoopback
     private static bool s_done;
     private static bool s_disableRequested;
     private static bool s_disableDone;
-    private static uint s_mainThreadId;
     private static IntPtr s_hookHandle;
     private static LowLevelKeyboardProc? s_hookProc;
     private static InputEngine? s_engine;
@@ -84,7 +82,6 @@ internal static class EngineLoopback
         // recently installed runs first), so the observation hook is installed
         // BEFORE the engine starts: the engine then runs first, and anything it
         // suppresses never reaches this observer.
-        s_mainThreadId = GetCurrentThreadId();
         s_hookProc = TestHookCallback;
         s_hookHandle = SetWindowsHookEx(WhKeyboardLl, s_hookProc, GetModuleHandle(null), 0);
         if (s_hookHandle == IntPtr.Zero)
@@ -157,15 +154,13 @@ internal static class EngineLoopback
             SendKey(TriggerCode, isKeyUp: true);
             Thread.Sleep(400);
             RecordAsyncState("post");
-
+        }
+        finally
+        {
             lock (s_gate)
             {
                 s_done = true;
             }
-        }
-        finally
-        {
-            PostThreadMessage(s_mainThreadId, WmQuit, UIntPtr.Zero, IntPtr.Zero);
         }
     }
 
@@ -191,15 +186,13 @@ internal static class EngineLoopback
             Thread.Sleep(1500);
             RecordAsyncState("post");
             Thread.Sleep(200);
-
+        }
+        finally
+        {
             lock (s_gate)
             {
                 s_done = true;
             }
-        }
-        finally
-        {
-            PostThreadMessage(s_mainThreadId, WmQuit, UIntPtr.Zero, IntPtr.Zero);
         }
     }
 
@@ -275,11 +268,11 @@ internal static class EngineLoopback
             while (PeekMessage(out var message, IntPtr.Zero, 0, 0, PmRemove))
             {
                 drained = true;
-                if (message.Message == WmQuit)
-                {
-                    return;
-                }
 
+                // No WM_QUIT fast-path on purpose: a quit message posted by a
+                // previous run can sit in this thread's queue when it starts,
+                // and treating it as "done" would end the pump before the hook
+                // ever sees an event. Dispatch everything; wait only on s_done.
                 TranslateMessage(ref message);
                 DispatchMessage(ref message);
             }
@@ -462,9 +455,6 @@ internal static class EngineLoopback
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? moduleName);
 
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
-
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PeekMessage(out MSG message, IntPtr windowHandle, uint minimumMessage, uint maximumMessage, uint removeMessage);
@@ -475,10 +465,6 @@ internal static class EngineLoopback
 
     [DllImport("user32.dll")]
     private static extern IntPtr DispatchMessage(ref MSG message);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
