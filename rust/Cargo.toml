@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "hyperkey-core",
+    "hyperkey-input",
+    "hyperkey-app",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+# Small binary for a background utility.
+opt-level = "s"
+lto = true
