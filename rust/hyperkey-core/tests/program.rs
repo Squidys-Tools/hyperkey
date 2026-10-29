@@ -414,6 +414,201 @@ fn unknown_trigger_name_falls_back_to_defaults() {
         .replace("\"trigger\": \"CapsLock\"", "\"trigger\": \"Win\"");
     let result = json::parse(&serialized);
 
-    assert!(result.used_defaults);
-    assert_eq!(HyperkeySettings::defaults(), result.settings);
+    assert!(!result.used_defaults);
+    assert!(result.repaired);
+    assert_eq!(HyperkeySettings::defaults().trigger(), result.settings.trigger());
+    assert_eq!(
+        HyperkeySettings::defaults().output_modifiers(),
+        result.settings.output_modifiers()
+    );
+}
+
+#[test]
+fn rapid_trigger_taps_replay_each_cycle() {
+    // Back-to-back taps must each replay the trigger and leave the machine
+    // in Idle, so a fast double- or triple-tap behaves like N normal presses.
+    let mut state = TriggerMachineState::IDLE;
+    for _ in 0..5 {
+        let held = process(state, caps_lock(KeyTransition::Down));
+        let released = process(held.state, caps_lock(KeyTransition::Up));
+        state = released.state;
+
+        assert!(matches!(held.decision, InputDecision::Suppress));
+        assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+        assert_eq!(TriggerPhase::Idle, state.phase);
+    }
+}
+
+#[test]
+fn tap_then_hold_still_activates_the_chord() {
+    // Double-tap-hold (tap, then press and keep holding) must engage the
+    // layer on the second press exactly like a first hold.
+    let tap = process(
+        process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down)).state,
+        caps_lock(KeyTransition::Up),
+    );
+    assert!(matches!(tap.decision, InputDecision::ReplayTrigger));
+
+    let held = process(tap.state, caps_lock(KeyTransition::Down));
+    let active = process(held.state, key(0x41, KeyTransition::Down));
+
+    let InputDecision::PressAndForward(press_modifiers) = &active.decision else {
+        panic!("Expected PressAndForward, got {:?}.", active.decision);
+    };
+    assert_eq!(TriggerPhase::HyperActive, active.state.phase);
+    assert_eq!(modifiers(), press_modifiers.as_slice());
+}
+
+#[test]
+fn solo_trigger_tap_never_touches_output_modifiers() {
+    // Tapping the trigger alone must only replay the trigger: no modifier
+    // press or release decision may be produced at any point.
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let released = process(held.state, caps_lock(KeyTransition::Up));
+
+    assert!(matches!(held.decision, InputDecision::Suppress));
+    assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+    assert!(!matches!(held.decision, InputDecision::PressAndForward(_)));
+    assert!(!matches!(
+        released.decision,
+        InputDecision::ReleaseAndSuppress(_)
+    ));
+
+    // A second tap afterwards behaves identically.
+    let second_tap = process(
+        process(released.state, caps_lock(KeyTransition::Down)).state,
+        caps_lock(KeyTransition::Up),
+    );
+    assert!(matches!(second_tap.decision, InputDecision::ReplayTrigger));
+    assert_eq!(TriggerPhase::Idle, second_tap.state.phase);
+}
+
+#[test]
+fn trigger_auto_repeat_while_held_stays_suppressed() {
+    // Holding the trigger produces repeated key-down events; each must stay
+    // suppressed and must not be mistaken for a new press.
+    let mut state = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down)).state;
+    for _ in 0..8 {
+        let repeated = process(state, caps_lock(KeyTransition::Down));
+        state = repeated.state;
+
+        assert_eq!(TriggerPhase::TriggerHeld, state.phase);
+        assert!(matches!(repeated.decision, InputDecision::Suppress));
+    }
+}
+
+#[test]
+fn trigger_auto_repeat_while_hyper_active_stays_suppressed() {
+    let active = process(
+        process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down)).state,
+        key(0x41, KeyTransition::Down),
+    );
+    assert_eq!(TriggerPhase::HyperActive, active.state.phase);
+
+    let repeated = process(active.state, caps_lock(KeyTransition::Down));
+    assert_eq!(TriggerPhase::HyperActive, repeated.state.phase);
+    assert!(matches!(repeated.decision, InputDecision::Suppress));
+}
+
+#[test]
+fn chord_key_auto_repeat_forwards_without_repressing_modifiers() {
+    // Auto-repeat of the chord key arrives as extra key-downs while the
+    // layer is already active; each is forwarded and modifiers are pressed
+    // only once (the first activation).
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let mut state = held.state;
+
+    let first = process(state, key(0x41, KeyTransition::Down));
+    assert!(matches!(first.decision, InputDecision::PressAndForward(_)));
+    state = first.state;
+
+    let mut press_count = 0;
+    for _ in 0..6 {
+        let repeated = process(state, key(0x41, KeyTransition::Down));
+        state = repeated.state;
+
+        assert_eq!(TriggerPhase::HyperActive, state.phase);
+        assert!(matches!(repeated.decision, InputDecision::Forward));
+        if matches!(repeated.decision, InputDecision::PressAndForward(_)) {
+            press_count += 1;
+        }
+    }
+
+    assert_eq!(0, press_count);
+}
+
+#[test]
+fn key_held_before_trigger_activates_layer_on_auto_repeat() {
+    // A key already held when the trigger is pressed generates auto-repeat
+    // key-downs in TriggerHeld. The machine cannot tell these from a fresh
+    // chord press, so the first repeat activates the layer. This documents
+    // current behavior (the key then gets the modifier layer applied).
+    let key_held_first = process(TriggerMachineState::IDLE, key(0x41, KeyTransition::Down));
+    assert!(matches!(key_held_first.decision, InputDecision::PassThrough));
+
+    let held = process(key_held_first.state, caps_lock(KeyTransition::Down));
+    let repeat = process(held.state, key(0x41, KeyTransition::Down));
+
+    let InputDecision::PressAndForward(press_modifiers) = &repeat.decision else {
+        panic!("Expected PressAndForward, got {:?}.", repeat.decision);
+    };
+    assert_eq!(TriggerPhase::HyperActive, repeat.state.phase);
+    assert_eq!(modifiers(), press_modifiers.as_slice());
+}
+
+#[test]
+fn trigger_released_mid_chord_releases_modifiers_and_returns_to_idle() {
+    // Release the trigger while the chord key is still held: the layer
+    // releases immediately (modifiers must not stick), and later events
+    // behave as if the layer was never on.
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let active = process(held.state, key(0x41, KeyTransition::Down));
+    let released = process(active.state, caps_lock(KeyTransition::Up));
+
+    let InputDecision::ReleaseAndSuppress(release_modifiers) = &released.decision else {
+        panic!(
+            "Expected ReleaseAndSuppress, got {:?}.",
+            released.decision
+        );
+    };
+    assert_eq!(modifiers(), release_modifiers.as_slice());
+    assert_eq!(TriggerPhase::Idle, released.state.phase);
+
+    // The still-held chord key's key-up, and any later keys, pass through
+    // untouched once the layer has disengaged.
+    let chord_key_up = process(released.state, key(0x41, KeyTransition::Up));
+    assert!(matches!(chord_key_up.decision, InputDecision::PassThrough));
+    assert_eq!(TriggerPhase::Idle, chord_key_up.state.phase);
+
+    let next_key = process(chord_key_up.state, key(0x42, KeyTransition::Down));
+    assert!(matches!(next_key.decision, InputDecision::PassThrough));
+    assert_eq!(TriggerPhase::Idle, next_key.state.phase);
+}
+
+#[test]
+fn trigger_release_between_two_chord_keys_still_releases() {
+    // Two keys pressed during one hold; releasing the trigger after only
+    // the first key's key-up still ends the layer cleanly.
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let first = process(held.state, key(0x41, KeyTransition::Down));
+    let second = process(first.state, key(0x42, KeyTransition::Down));
+    let released = process(second.state, caps_lock(KeyTransition::Up));
+
+    assert!(matches!(first.decision, InputDecision::PressAndForward(_)));
+    assert!(matches!(second.decision, InputDecision::Forward));
+    assert!(matches!(
+        released.decision,
+        InputDecision::ReleaseAndSuppress(_)
+    ));
+    assert_eq!(TriggerPhase::Idle, released.state.phase);
+}
+
+#[test]
+fn stray_trigger_key_up_passes_through_without_a_replay() {
+    // A trigger key-up with no preceding key-down (e.g. the hook attached
+    // while the key was already held) must not replay a spurious tap.
+    let transition = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Up));
+
+    assert_eq!(TriggerPhase::Idle, transition.state.phase);
+    assert!(matches!(transition.decision, InputDecision::PassThrough));
 }
