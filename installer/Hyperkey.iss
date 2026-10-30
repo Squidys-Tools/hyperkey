@@ -4,8 +4,10 @@
 
 #define AppName "Hyperkey"
 #define AppPublisher "Hyperkey"
+; The shipped binary is the Rust hyperkey-app build, staged as Hyperkey.App.exe
+; by scripts/package-installer.ps1 so existing installs upgrade in place.
 #define AppExeName "Hyperkey.App.exe"
-#define PublishDir "..\publish\win-x64"
+#define PublishDir "..\publish\app"
 
 [Setup]
 AppId={{9C2D0E61-8C79-4F56-9DB4-4DB4F0B6F4E3}
