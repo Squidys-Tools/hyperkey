@@ -24,12 +24,13 @@ From the repository root, package the application with:
 .\scripts\package-installer.ps1
 ```
 
-The script reads the shared version from `Directory.Build.props`, builds the app with
-`cargo build --release -p hyperkey-app` from `rust\`, stages the binary as
-`publish\app\Hyperkey.App.exe`, and writes the installer to `publish\installer` as
-`Hyperkey-Setup-<version>.exe`. It requires the Rust toolchain and Inno Setup 6, and finds Inno
-Setup in `PATH`, under Program Files, or in a per-user install under `%LOCALAPPDATA%\Programs`.
-Pass `-Configuration Debug` for a faster local build.
+The script reads the version from `[workspace.package]` `version` in the root `Cargo.toml`,
+builds the app with `cargo build --release -p hyperkey-app` from the repository root, stages
+the binary as `publish\app\Hyperkey.App.exe`, and writes the installer to `publish\installer`
+as `Hyperkey-Setup-<version>.exe`. It requires the Rust toolchain and Inno Setup 6, and finds
+Inno Setup in `PATH`, under Program Files, or in a per-user install under
+`%LOCALAPPDATA%\Programs`. Pass `-Version` to override the version, and `-Configuration Debug`
+for a faster local build.
 
 ## Verifying the installer
 

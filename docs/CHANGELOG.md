@@ -4,7 +4,7 @@ This document tracks the implementation phases and current project status.
 
 ## Current Status
 
-**Version:** 0.1.1
+**Version:** 0.1.2
 **Phase:** 4 - Packaging and Polish (Complete)
 
 ---
@@ -108,6 +108,7 @@ a frame by DPI.
 
 | Version | Date | Phase | Notes |
 |---------|------|-------|-------|
+| 0.1.2 | - | 4 | Settings window rewritten in Rust (iced) with a dark theme; the installer ships the Rust app and upgrades an existing C# install in place |
 | Unreleased | - | 4 | Rebindable trigger key, main window redesign with theme tokens, press-to-rebind button, key-up synthesis for released modifiers, automated installer verification |
 | 0.1.1 | - | 4 | Lazy-load settings window for lower tray-idle memory usage |
 | 0.1.0 | - | 4 | Initial MVP, phases 1-3 complete |
