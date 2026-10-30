@@ -10,13 +10,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$rustWorkspacePath = Join-Path $repositoryRoot 'rust'
-$versionPropsPath = Join-Path $repositoryRoot 'Directory.Build.props'
+$workspaceManifestPath = Join-Path $repositoryRoot 'Cargo.toml'
 $publishPath = Join-Path $repositoryRoot 'publish\app'
 $installerScriptPath = Join-Path $repositoryRoot 'installer\Hyperkey.iss'
 
-if (-not (Test-Path -LiteralPath (Join-Path $rustWorkspacePath 'Cargo.toml') -PathType Leaf)) {
-    throw "The Rust workspace was not found: $rustWorkspacePath"
+if (-not (Test-Path -LiteralPath $workspaceManifestPath -PathType Leaf)) {
+    throw "The Rust workspace was not found: $workspaceManifestPath"
 }
 
 if (-not (Test-Path -LiteralPath $installerScriptPath -PathType Leaf)) {
@@ -24,13 +23,16 @@ if (-not (Test-Path -LiteralPath $installerScriptPath -PathType Leaf)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    if (-not (Test-Path -LiteralPath $versionPropsPath -PathType Leaf)) {
-        throw "The shared version file was not found: $versionPropsPath"
+    $workspacePackage = [regex]::Match(
+        (Get-Content -LiteralPath $workspaceManifestPath -Raw),
+        '(?ms)^\[workspace\.package\]\s*(.*?)(?=^\[|\z)')
+    $versionMatch = [regex]::Match(
+        $workspacePackage.Groups[1].Value,
+        'version\s*=\s*"([^"]+)"')
+    if (-not $versionMatch.Success) {
+        throw "The [workspace.package] version was not found in: $workspaceManifestPath"
     }
-
-    [xml]$versionDocument = Get-Content -LiteralPath $versionPropsPath -Raw
-    $versionNode = $versionDocument.SelectSingleNode('/Project/PropertyGroup/VersionPrefix')
-    $Version = $versionNode.InnerText.Trim()
+    $Version = $versionMatch.Groups[1].Value.Trim()
 }
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
@@ -50,7 +52,7 @@ if ($Configuration -eq 'Release') {
 }
 
 Write-Host "Building hyperkey-app $Version ($Configuration)..."
-Push-Location $rustWorkspacePath
+Push-Location $repositoryRoot
 try {
     & $cargo.Source @cargoArguments
     if ($LASTEXITCODE -ne 0) {
@@ -61,7 +63,7 @@ finally {
     Pop-Location
 }
 
-$builtExecutable = Join-Path $rustWorkspacePath "target\$profileDirectory\hyperkey-app.exe"
+$builtExecutable = Join-Path $repositoryRoot "target\$profileDirectory\hyperkey-app.exe"
 if (-not (Test-Path -LiteralPath $builtExecutable -PathType Leaf)) {
     throw "The built executable was not created: $builtExecutable"
 }
