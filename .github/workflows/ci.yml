@@ -13,59 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    runs-on: windows-2025
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore solution
-        run: dotnet restore Hyperkey.sln
-
-      - name: Build solution
-        run: dotnet build Hyperkey.sln --configuration Release --no-restore --property:Platform=x64
-
-      - name: Run core tests
-        run: dotnet run --project tests\Hyperkey.Core.Tests\Hyperkey.Core.Tests.csproj --configuration Release --no-build
-
-  installer:
-    runs-on: windows-2025
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component clippy
-          rustup default stable-x86_64-pc-windows-msvc
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
-
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
-
-      # The upgrade check upgrades the last C# release to the new Rust build.
-      - name: Download the previous C# installer as the upgrade baseline
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release download v0.1.1 --pattern "Hyperkey-Setup-*.exe" --dir baseline
-
-      # Installs the C# baseline, launches, upgrades to the Rust build, and
-      # uninstalls the real per-user setup on every change.
-      - name: Verify installer
-        shell: pwsh
-        run: ./scripts/verify-installer.ps1 -BaselineSetupPath ./baseline/Hyperkey-Setup-0.1.1.exe
-
   rust:
     runs-on: windows-2025
     permissions:
@@ -82,17 +29,42 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
 
       - name: Lint workspace
-        working-directory: rust
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Run core tests
-        working-directory: rust
-        run: cargo test -p hyperkey-core
+      - name: Run workspace tests
+        run: cargo test --workspace
 
       - name: Build app
-        working-directory: rust
         run: cargo build -p hyperkey-app --release
+
+  installer:
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component clippy
+          rustup default stable-x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      # The upgrade check upgrades the last C# release to the new Rust build.
+      - name: Download the previous C# installer as the upgrade baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download v0.1.1 --pattern "Hyperkey-Setup-*.exe" --dir baseline
+
+      # Installs the C# baseline, launches, upgrades to the Rust build, and
+      # uninstalls the real per-user setup on every change.
+      - name: Verify installer
+        shell: pwsh
+        run: ./scripts/verify-installer.ps1 -BaselineSetupPath ./baseline/Hyperkey-Setup-0.1.1.exe
