@@ -1,25 +1,88 @@
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 //! Hyperkey settings daemon: a tray-resident process that owns the keyboard
 //! hook engine. iced's daemon mode keeps the app alive with no window open;
 //! the settings window is shown from the tray and hidden when closed.
+mod clipboard;
+mod keymap;
+mod session_window;
 mod settings_store;
+mod settings_view;
 mod single_instance;
+mod startup;
 mod tray;
 
-use hyperkey_core::settings::HyperkeySettings;
+use hyperkey_core::keys::TriggerKey;
+use hyperkey_core::settings::{HyperkeySettings, OutputModifier};
 use hyperkey_input::engine::{InputEngine, InputEngineStatus};
-use iced::widget::{button, column, container, text};
-use iced::{Element, Fill, Size, Subscription, Task, window};
+use iced::keyboard::key::{Code, Named, Physical};
+use iced::keyboard::{self, Key};
+use iced::theme::{self, Palette};
+use iced::{Color, Element, Size, Subscription, Task, Theme, window};
+use session_window::SessionEvent;
 use settings_store::SettingsStore;
 use std::time::Duration;
+
+/// Keyboard focus targets, in the order they appear on screen. iced's
+/// buttons and togglers do not take keyboard focus themselves, so the app
+/// keeps an explicit focus ring: Tab and Shift+Tab move it and Enter or
+/// Space activates the focused control.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum FocusTarget {
+    EnabledToggle,
+    RebindTrigger,
+    ModifierControl,
+    ModifierAlt,
+    ModifierShift,
+    LaunchAtStartup,
+    LaunchToTray,
+    RestartHook,
+    EmergencyDisable,
+    CopyDetails,
+}
+
+const FOCUS_ORDER: &[FocusTarget] = &[
+    FocusTarget::EnabledToggle,
+    FocusTarget::RebindTrigger,
+    FocusTarget::ModifierControl,
+    FocusTarget::ModifierAlt,
+    FocusTarget::ModifierShift,
+    FocusTarget::LaunchAtStartup,
+    FocusTarget::LaunchToTray,
+    FocusTarget::RestartHook,
+    FocusTarget::EmergencyDisable,
+    FocusTarget::CopyDetails,
+];
+
+const IDLE_TRIGGER_HINT: &str = "Select to rebind — press any key. Esc cancels.";
+const CAPTURE_TRIGGER_HINT: &str = "Press the key to use as trigger. Esc cancels.";
+const MODIFIER_KEY_HINT: &str =
+    "Modifier and system keys can't be the trigger. Press a letter, digit, \
+     function key, or punctuation — or press Esc to cancel.";
+const INVALID_KEY_HINT: &str =
+    "That key can't be used as the trigger. Try another key, or press Esc to cancel.";
+const MODIFIER_CHOICE_HINT: &str = "Choose one or more modifiers.";
+const MODIFIER_REQUIRED_HINT: &str = "Choose at least one modifier.";
+/// The Hyperkey accent, matching the C# SystemAccentColor resource.
+const ACCENT: Color = Color::from_rgb8(0x0B, 0x64, 0xD2);
 
 #[derive(Debug, Clone)]
 enum Message {
     ToggleEnabled,
+    EnabledToggled(bool),
+    ModifierToggled(OutputModifier, bool),
+    LaunchAtStartupToggled(bool),
+    LaunchToTrayToggled(bool),
+    StartTriggerCapture,
+    KeyboardEvent(keyboard::Event),
     OpenSettings,
-    HideSettings,
     Quit,
     WindowCloseRequested(window::Id),
     Tick,
+    RestartHook,
+    EmergencyDisable,
+    CopyDetails,
+    SessionEvent(SessionEvent),
+    SystemTheme(theme::Mode),
 }
 
 struct State {
@@ -28,17 +91,32 @@ struct State {
     engine: InputEngine,
     tray: Option<tray::Tray>,
     settings_window: Option<window::Id>,
-    recovery_message: Option<String>,
+    /// Banner for settings load/save problems: fatal quarantines, repairs,
+    /// and write failures.
+    banner: Option<String>,
+    /// Hook lifecycle and restart notes, shown under Diagnostics.
     diagnostic_message: Option<String>,
+    /// Startup-registration failure, reported like the C# diagnostic slot.
+    startup_error: Option<String>,
+    /// Result of the last Copy details action.
+    copy_status: Option<String>,
+    capturing_trigger: bool,
+    trigger_hint: &'static str,
+    modifier_hint: &'static str,
+    focus: Option<FocusTarget>,
+    last_engine_status: InputEngineStatus,
+    system_mode: theme::Mode,
     is_quitting: bool,
 }
 
-fn boot() -> (State, Task<Message>) {
+fn boot(start_to_tray: bool) -> (State, Task<Message>) {
     let store = SettingsStore::new();
     let load = store.load();
     let settings = load.settings;
 
     let engine = InputEngine::new(settings.trigger(), settings.output_modifiers().to_vec());
+    let startup_error = startup::apply(settings.launch_at_startup()).err();
+
     let mut diagnostic_message = None;
     if settings.enabled() && !engine.start() {
         diagnostic_message = Some(
@@ -48,7 +126,9 @@ fn boot() -> (State, Task<Message>) {
         );
     }
 
-    let tray = match tray::Tray::create(&settings) {
+    let last_engine_status = engine.status();
+    let running = last_engine_status == InputEngineStatus::Running;
+    let tray = match tray::Tray::create(&settings, running) {
         Ok(tray) => Some(tray),
         Err(_) => {
             diagnostic_message =
@@ -63,31 +143,72 @@ fn boot() -> (State, Task<Message>) {
         engine,
         tray,
         settings_window: None,
-        recovery_message: load.message,
+        banner: load.message,
         diagnostic_message,
+        startup_error,
+        copy_status: None,
+        capturing_trigger: false,
+        trigger_hint: IDLE_TRIGGER_HINT,
+        modifier_hint: MODIFIER_CHOICE_HINT,
+        focus: None,
+        last_engine_status,
+        system_mode: theme::Mode::None,
         is_quitting: false,
     };
 
-    if state.settings.launch_to_tray() {
-        (state, Task::none())
+    let initial_theme = iced::system::theme().map(Message::SystemTheme);
+    if start_to_tray || state.settings.launch_to_tray() {
+        (state, initial_theme)
     } else {
         let (id, task) = open_settings_window();
         state.settings_window = Some(id);
-        (state, task.discard())
+        state.focus = Some(FocusTarget::EnabledToggle);
+        (state, Task::batch([task.discard(), initial_theme]))
     }
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ToggleEnabled => {
-            toggle_enabled(state);
+            update_settings(
+                state,
+                state.settings.with_enabled(!state.settings.enabled()),
+                true,
+            );
+            Task::none()
+        }
+        Message::EnabledToggled(enabled) => {
+            update_settings(state, state.settings.with_enabled(enabled), true);
+            Task::none()
+        }
+        Message::ModifierToggled(modifier, selected) => {
+            toggle_modifier(state, modifier, selected);
+            Task::none()
+        }
+        Message::LaunchAtStartupToggled(launch) => {
+            update_settings(state, state.settings.with_launch_at_startup(launch), true);
+            Task::none()
+        }
+        Message::LaunchToTrayToggled(to_tray) => {
+            update_settings(state, state.settings.with_launch_to_tray(to_tray), true);
+            Task::none()
+        }
+        Message::StartTriggerCapture => {
+            if !state.capturing_trigger {
+                state.capturing_trigger = true;
+                state.trigger_hint = CAPTURE_TRIGGER_HINT;
+            }
+            Task::none()
+        }
+        Message::KeyboardEvent(event) => {
+            if state.capturing_trigger {
+                capture_trigger_key(state, &event);
+            } else {
+                navigate_focus(state, &event);
+            }
             Task::none()
         }
         Message::OpenSettings => show_settings_window(state),
-        Message::HideSettings => match state.settings_window {
-            Some(id) => window::set_mode(id, window::Mode::Hidden),
-            None => Task::none(),
-        },
         Message::Quit => quit(state),
         Message::WindowCloseRequested(id) => {
             if state.settings_window == Some(id) {
@@ -96,62 +217,378 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 window::close(id)
             }
         }
-        // The engine has no status callback; the tick re-renders the status
-        // line and mirrors the C# failed-status diagnostic.
+        // The engine reports status through polling, so a slow tick refreshes
+        // the status line, mirrors the C# failed-status diagnostic, and keeps
+        // the tray icon in sync with hook health.
         Message::Tick => {
-            if state.engine.status() == InputEngineStatus::Failed
-                && state.diagnostic_message.is_none()
-            {
-                state.diagnostic_message = state
-                    .engine
-                    .status_error()
-                    .or_else(|| Some("The keyboard hook stopped.".to_string()));
+            let status = state.engine.status();
+            if status != state.last_engine_status {
+                state.last_engine_status = status;
+                if status == InputEngineStatus::Failed && state.diagnostic_message.is_none() {
+                    state.diagnostic_message = state
+                        .engine
+                        .status_error()
+                        .or_else(|| Some("The keyboard hook stopped.".to_string()));
+                }
+
+                refresh_tray(state);
             }
+            Task::none()
+        }
+        Message::RestartHook => {
+            restart_hook(state);
+            Task::none()
+        }
+        Message::EmergencyDisable => {
+            state.engine.emergency_disable();
+            update_settings(state, state.settings.with_enabled(false), false);
+            Task::none()
+        }
+        Message::CopyDetails => {
+            state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
+                Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
+                Err(error) => Some(error),
+            };
+            Task::none()
+        }
+        Message::SessionEvent(SessionEvent::ReconcileEngine) => {
+            if !state.is_quitting {
+                state.engine.reconcile();
+            }
+            Task::none()
+        }
+        Message::SessionEvent(SessionEvent::ShowSettings) => show_settings_window(state),
+        Message::SystemTheme(mode) => {
+            state.system_mode = mode;
             Task::none()
         }
     }
 }
 
-fn view(state: &State, _window: window::Id) -> Element<'_, Message> {
-    let mut content = column![
-        text("Hyperkey").size(30),
-        text(if state.settings.enabled() {
-            "Enabled"
+/// Mirrors the C# `UpdateSettings`: persist first, then apply the startup
+/// registration when it changed, reconfigure the engine when the input
+/// configuration changed, and start or stop the engine to match `enabled`.
+fn update_settings(state: &mut State, settings: HyperkeySettings, persist: bool) {
+    let input_configuration_changed = state.settings.trigger() != settings.trigger()
+        || state.settings.output_modifiers() != settings.output_modifiers();
+    let launch_at_startup_changed =
+        state.settings.launch_at_startup() != settings.launch_at_startup();
+    state.settings = settings;
+
+    if persist {
+        match state.store.save(&state.settings) {
+            Ok(()) => state.banner = None,
+            Err(error) => state.banner = Some(error),
+        }
+    }
+
+    if launch_at_startup_changed {
+        state.startup_error = startup::apply(state.settings.launch_at_startup()).err();
+    }
+
+    if input_configuration_changed {
+        state.engine.configure(
+            state.settings.trigger(),
+            state.settings.output_modifiers().to_vec(),
+        );
+    }
+
+    if state.settings.enabled() {
+        if state.engine.start() {
+            state.diagnostic_message = None;
         } else {
-            "Disabled"
-        }),
-        text(format!(
-            "Trigger key: {}",
-            state.settings.trigger().display_label()
-        )),
-        text(format!(
-            "Output modifiers: {}",
-            modifiers_label(&state.settings)
-        )),
-        text(format!(
-            "Input engine: {}",
-            status_label(state.engine.status())
-        )),
+            state.diagnostic_message = Some(
+                state
+                    .engine
+                    .status_error()
+                    .unwrap_or_else(|| "The keyboard hook could not be started.".to_string()),
+            );
+        }
+    } else {
+        state.engine.stop();
+        state.diagnostic_message = None;
+    }
+
+    // A settings change ends any in-flight trigger capture, like the C#
+    // ApplySettings → ExitTriggerCapture path.
+    state.capturing_trigger = false;
+    state.trigger_hint = IDLE_TRIGGER_HINT;
+    state.copy_status = None;
+
+    refresh_tray(state);
+}
+
+fn toggle_modifier(state: &mut State, modifier: OutputModifier, selected: bool) {
+    let mut modifiers: Vec<OutputModifier> = state.settings.output_modifiers().to_vec();
+    if selected {
+        if !modifiers.contains(&modifier) {
+            modifiers.push(modifier);
+        }
+    } else {
+        modifiers.retain(|existing| *existing != modifier);
+    }
+
+    if modifiers.is_empty() {
+        // The C# window re-checks the box and asks for at least one modifier.
+        state.modifier_hint = MODIFIER_REQUIRED_HINT;
+        return;
+    }
+
+    match state.settings.with_output_modifiers(modifiers) {
+        Ok(settings) => {
+            state.modifier_hint = MODIFIER_CHOICE_HINT;
+            update_settings(state, settings, true);
+        }
+        Err(_) => state.modifier_hint = MODIFIER_REQUIRED_HINT,
+    }
+}
+
+/// Key-press capture for trigger rebinding, mirroring the C#
+/// PreviewKeyDown handler: every key sets the trigger when the core
+/// allowlist accepts it, Escape cancels, and modifiers get the more
+/// specific rejection hint. Repeats are ignored so the key that activated
+/// capture cannot bind itself while it is still held.
+fn capture_trigger_key(state: &mut State, event: &keyboard::Event) {
+    let keyboard::Event::KeyPressed {
+        physical_key: Physical::Code(code),
+        modifiers,
+        repeat: false,
+        ..
+    } = event
+    else {
+        return;
+    };
+
+    match code {
+        Code::Escape => {
+            state.capturing_trigger = false;
+            state.trigger_hint = IDLE_TRIGGER_HINT;
+        }
+        // Mirroring the C# IsModifierOrSystemKey + HasHeldModifiers check:
+        // a chord can never be the trigger.
+        code if keymap::is_modifier_or_system(*code)
+            || modifiers.control()
+            || modifiers.alt()
+            || modifiers.shift()
+            || modifiers.logo() =>
+        {
+            state.trigger_hint = MODIFIER_KEY_HINT;
+        }
+        code => match keymap::virtual_key_code(*code).and_then(TriggerKey::try_create) {
+            Some(trigger) => match state.settings.with_trigger(trigger) {
+                Ok(settings) => update_settings(state, settings, true),
+                Err(_) => state.trigger_hint = INVALID_KEY_HINT,
+            },
+            None => state.trigger_hint = INVALID_KEY_HINT,
+        },
+    }
+}
+
+/// Tab/Shift+Tab moves the focus ring; Enter and Space activate the focused
+/// control, matching what a native focus model would do.
+fn navigate_focus(state: &mut State, event: &keyboard::Event) {
+    let keyboard::Event::KeyPressed {
+        key, modifiers, repeat: false, ..
+    } = event
+    else {
+        return;
+    };
+
+    match key.as_ref() {
+        Key::Named(Named::Tab) => {
+            let step: isize = if modifiers.shift() { -1 } else { 1 };
+            let count = FOCUS_ORDER.len() as isize;
+            let current = state
+                .focus
+                .and_then(|target| FOCUS_ORDER.iter().position(|entry| *entry == target))
+                .unwrap_or(0) as isize;
+            state.focus = Some(FOCUS_ORDER[((current + step + count) % count) as usize]);
+        }
+        Key::Named(Named::Enter) | Key::Named(Named::Space) => {
+            activate_focused(state);
+        }
+        _ => {}
+    }
+}
+
+fn activate_focused(state: &mut State) {
+    match state.focus {
+        Some(FocusTarget::EnabledToggle) => {
+            update_settings(
+                state,
+                state.settings.with_enabled(!state.settings.enabled()),
+                true,
+            );
+        }
+        Some(FocusTarget::RebindTrigger) => {
+            state.capturing_trigger = true;
+            state.trigger_hint = CAPTURE_TRIGGER_HINT;
+        }
+        Some(FocusTarget::ModifierControl) => {
+            toggle_modifier(state, OutputModifier::Control, !has_modifier(state, OutputModifier::Control));
+        }
+        Some(FocusTarget::ModifierAlt) => {
+            toggle_modifier(state, OutputModifier::Alt, !has_modifier(state, OutputModifier::Alt));
+        }
+        Some(FocusTarget::ModifierShift) => {
+            toggle_modifier(state, OutputModifier::Shift, !has_modifier(state, OutputModifier::Shift));
+        }
+        Some(FocusTarget::LaunchAtStartup) => {
+            update_settings(
+                state,
+                state
+                    .settings
+                    .with_launch_at_startup(!state.settings.launch_at_startup()),
+                true,
+            );
+        }
+        Some(FocusTarget::LaunchToTray) => {
+            update_settings(
+                state,
+                state
+                    .settings
+                    .with_launch_to_tray(!state.settings.launch_to_tray()),
+                true,
+            );
+        }
+        Some(FocusTarget::RestartHook) => restart_hook(state),
+        Some(FocusTarget::EmergencyDisable) => {
+            state.engine.emergency_disable();
+            update_settings(state, state.settings.with_enabled(false), false);
+        }
+        Some(FocusTarget::CopyDetails) => {
+            state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
+                Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
+                Err(error) => Some(error),
+            };
+        }
+        None => {}
+    }
+}
+
+fn has_modifier(state: &State, modifier: OutputModifier) -> bool {
+    state.settings.output_modifiers().contains(&modifier)
+}
+
+/// Mirrors the C# RestartInputEngine: refuse while disabled, prefer the
+/// engine's hook-only restart, and fall back to a full stop/start cycle.
+fn restart_hook(state: &mut State) {
+    if !state.settings.enabled() {
+        state.diagnostic_message =
+            Some("Enable Hyperkey before restarting the keyboard hook.".to_string());
+        return;
+    }
+
+    if state.engine.restart_hook() {
+        state.diagnostic_message =
+            Some("The keyboard hook restart was requested.".to_string());
+        return;
+    }
+
+    state.engine.stop();
+    state.diagnostic_message = if state.engine.start() {
+        Some("The keyboard hook was restarted successfully.".to_string())
+    } else {
+        Some(
+            state
+                .engine
+                .status_error()
+                .unwrap_or_else(|| "The keyboard hook could not be restarted.".to_string()),
+        )
+    };
+}
+
+/// The C# DiagnosticDetails block, copied verbatim as plain text.
+fn diagnostic_details(state: &State) -> String {
+    let none = || "None".to_string();
+    let diagnostic = state
+        .startup_error
+        .as_ref()
+        .or(state.diagnostic_message.as_ref())
+        .cloned()
+        .unwrap_or_else(none);
+    let recovery = state.banner.clone().unwrap_or_else(none);
+    let status_error = state.engine.status_error().unwrap_or_else(none);
+    let modifiers = state
+        .settings
+        .output_modifiers()
+        .iter()
+        .map(modifier_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    [
+        format!("Hyperkey version: {}", env!("CARGO_PKG_VERSION")),
+        format!("Enabled: {}", state.settings.enabled()),
+        format!("Trigger: {}", state.settings.trigger().display_label()),
+        format!("Output modifiers: {modifiers}"),
+        format!("Input status: {:?}", state.engine.status()),
+        format!("Input status error: {status_error}"),
+        format!("Launch at login: {}", state.settings.launch_at_startup()),
+        format!("Launch to tray: {}", state.settings.launch_to_tray()),
+        format!("Diagnostic message: {diagnostic}"),
+        format!("Recovery message: {recovery}"),
     ]
-    .spacing(10)
-    .padding(24);
+    .join("\r\n")
+}
 
-    if let Some(error) = state.engine.status_error() {
-        content = content.push(text(format!("Engine error: {error}")));
+fn modifier_name(modifier: &OutputModifier) -> &'static str {
+    match modifier {
+        OutputModifier::Control => "Control",
+        OutputModifier::Alt => "Alt",
+        OutputModifier::Shift => "Shift",
     }
-    if let Some(message) = &state.diagnostic_message {
-        content = content.push(text(message.clone()));
-    }
-    if let Some(message) = &state.recovery_message {
-        content = content.push(text(message.clone()));
-    }
-    content = content.push(text(format!(
-        "Settings file: {}",
-        state.store.settings_path().display()
-    )));
-    content = content.push(button("Close").on_press(Message::HideSettings));
+}
 
-    container(content).center(Fill).into()
+fn refresh_tray(state: &mut State) {
+    if let Some(tray) = &mut state.tray {
+        tray.update(
+            &state.settings,
+            state.engine.status() == InputEngineStatus::Running,
+        );
+    }
+}
+
+fn open_settings_window() -> (window::Id, Task<window::Id>) {
+    window::open(window::Settings {
+        size: Size::new(560.0, 700.0),
+        min_size: Some(Size::new(460.0, 560.0)),
+        position: window::Position::Centered,
+        // Closing hides the window; the daemon keeps running in the tray.
+        exit_on_close_request: false,
+        icon: window::icon::from_rgba(tray::icon_rgba(true), 32, 32).ok(),
+        ..Default::default()
+    })
+}
+
+fn show_settings_window(state: &mut State) -> Task<Message> {
+    if state.focus.is_none() {
+        state.focus = Some(FocusTarget::EnabledToggle);
+    }
+
+    match state.settings_window {
+        Some(id) => Task::batch([
+            window::set_mode(id, window::Mode::Windowed),
+            window::gain_focus(id),
+        ]),
+        None => {
+            let (id, task) = open_settings_window();
+            state.settings_window = Some(id);
+            task.discard()
+        }
+    }
+}
+
+fn quit(state: &mut State) -> Task<Message> {
+    if state.is_quitting {
+        return Task::none();
+    }
+
+    state.is_quitting = true;
+    state.engine.emergency_disable();
+    state.engine.stop();
+    drop(state.tray.take());
+    iced::exit()
 }
 
 fn title(_state: &State, _window: window::Id) -> String {
@@ -162,13 +599,16 @@ fn subscription(_state: &State) -> Subscription<Message> {
     Subscription::batch([
         Subscription::run(tray_events),
         Subscription::run(status_tick),
+        Subscription::run(session_events),
+        keyboard::listen().map(Message::KeyboardEvent),
         window::close_requests().map(Message::WindowCloseRequested),
+        iced::system::theme_changes().map(Message::SystemTheme),
     ])
 }
 
-/// The engine has no status callback, so a slow tick refreshes the status line
-/// and mirrors the C# failed-status diagnostic. The default thread-pool
-/// executor has no timer, hence a dedicated sleeping thread.
+/// The engine has no status callback wired into iced, so a slow tick
+/// refreshes the status line and tray icon. The default thread-pool executor
+/// has no timer, hence a dedicated sleeping thread.
 fn status_tick() -> impl iced::futures::stream::Stream<Item = Message> {
     iced::stream::channel(4, |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
         let _ = std::thread::Builder::new()
@@ -226,105 +666,61 @@ fn tray_events() -> impl iced::futures::stream::Stream<Item = Message> {
     })
 }
 
-fn open_settings_window() -> (window::Id, Task<window::Id>) {
-    window::open(window::Settings {
-        size: Size::new(440.0, 420.0),
-        min_size: Some(Size::new(360.0, 320.0)),
-        position: window::Position::Centered,
-        // Closing hides the window; the daemon keeps running in the tray.
-        exit_on_close_request: false,
-        ..Default::default()
+/// Power, session, and cross-instance notifications arrive on the hidden
+/// session window's thread; this bridge forwards them into the daemon.
+fn session_events() -> impl iced::futures::stream::Stream<Item = Message> {
+    iced::stream::channel(8, |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+        session_window::spawn(move |event| {
+            let _ = sender.clone().try_send(Message::SessionEvent(event));
+        });
     })
 }
 
-fn show_settings_window(state: &mut State) -> Task<Message> {
-    match state.settings_window {
-        Some(id) => Task::batch([
-            window::set_mode(id, window::Mode::Windowed),
-            window::gain_focus(id),
-        ]),
-        None => {
-            let (id, task) = open_settings_window();
-            state.settings_window = Some(id);
-            task.discard()
-        }
-    }
+fn view(state: &State, _window: window::Id) -> Element<'_, Message> {
+    settings_view::view(state)
 }
 
-fn toggle_enabled(state: &mut State) {
-    let enabled = !state.settings.enabled();
-    state.settings = state.settings.with_enabled(enabled);
-
-    match state.store.save(&state.settings) {
-        Ok(()) => state.recovery_message = None,
-        Err(error) => state.recovery_message = Some(error),
-    }
-
-    if enabled {
-        if state.engine.start() {
-            state.diagnostic_message = None;
-        } else {
-            state.diagnostic_message = Some(
-                state
-                    .engine
-                    .status_error()
-                    .unwrap_or_else(|| "The keyboard hook could not be started.".to_string()),
-            );
-        }
-    } else {
-        state.engine.stop();
-        state.diagnostic_message = None;
-    }
-
-    if let Some(tray) = &state.tray {
-        tray.update(&state.settings);
-    }
-}
-
-fn quit(state: &mut State) -> Task<Message> {
-    if state.is_quitting {
-        return Task::none();
-    }
-
-    state.is_quitting = true;
-    state.engine.emergency_disable();
-    state.engine.stop();
-    drop(state.tray.take());
-    iced::exit()
-}
-
-fn modifiers_label(settings: &HyperkeySettings) -> String {
-    settings
-        .output_modifiers()
-        .iter()
-        .map(|modifier| match modifier {
-            hyperkey_core::settings::OutputModifier::Control => "Control",
-            hyperkey_core::settings::OutputModifier::Alt => "Alt",
-            hyperkey_core::settings::OutputModifier::Shift => "Shift",
-        })
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
-fn status_label(status: InputEngineStatus) -> &'static str {
-    match status {
-        InputEngineStatus::Stopped => "Stopped",
-        InputEngineStatus::Starting => "Starting",
-        InputEngineStatus::Running => "Running",
-        InputEngineStatus::Stopping => "Stopping",
-        InputEngineStatus::Failed => "Failed",
-    }
+/// The Hyperkey theme: the standard light or dark palette with the accent
+/// color pinned to the Hyperkey blue (#0B64D2), following the system mode.
+/// Before the first SystemTheme message arrives `Mode::None` resolves to
+/// the light palette.
+fn theme(state: &State, _window: window::Id) -> Theme {
+    let base = match state.system_mode {
+        theme::Mode::Dark => Palette::DARK,
+        theme::Mode::None | theme::Mode::Light => Palette::LIGHT,
+    };
+    Theme::custom(
+        "Hyperkey",
+        Palette {
+            primary: ACCENT,
+            ..base
+        },
+    )
 }
 
 fn main() -> iced::Result {
-    // Only one Hyperkey may own the keyboard hook at a time.
+    // Only one Hyperkey may own the keyboard hook at a time; the name is
+    // shared with the C# build so the two cannot run side by side either.
     let _single_instance = match single_instance::acquire() {
         Some(guard) => guard,
-        None => return Ok(()),
+        None => {
+            // Ask the running instance to surface its settings window; fall
+            // back to a visible message when the broadcast cannot be posted.
+            if !single_instance::notify_existing() {
+                session_window::message_box(
+                    "Hyperkey is already running.",
+                    "Hyperkey",
+                );
+            }
+            return Ok(());
+        }
     };
 
-    iced::daemon(boot, update, view)
+    let start_to_tray = std::env::args().any(|arg| arg == "--tray");
+
+    iced::daemon(move || boot(start_to_tray), update, view)
         .title(title)
         .subscription(subscription)
+        .theme(theme)
         .run()
 }
