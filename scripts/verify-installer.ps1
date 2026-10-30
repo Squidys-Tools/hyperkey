@@ -2,7 +2,12 @@
 param(
     # The upgrade check builds and installs a second installer, so it roughly doubles
     # the runtime. Skip it while iterating locally; CI always runs the full path.
-    [switch]$SkipUpgrade
+    [switch]$SkipUpgrade,
+
+    # Optional prebuilt "old" setup to upgrade from — for example the last C#
+    # release downloaded from GitHub Releases. When given, the upgrade check
+    # installs it first, so the C# -> Rust upgrade path is exercised for real.
+    [string]$BaselineSetupPath
 )
 
 Set-StrictMode -Version Latest
@@ -21,6 +26,10 @@ $appDataDirectory = Join-Path $env:LOCALAPPDATA 'Hyperkey'
 $settingsPath = Join-Path $appDataDirectory 'settings.json'
 $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $runValueName = 'Hyperkey'
+# Per-user Inno installs register under HKCU with the AppId plus an "_is1" suffix.
+# This is also how the installed version is read: the Rust binary carries no
+# version resource, so the installer's own DisplayVersion record is the source.
+$uninstallKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{9C2D0E61-8C79-4F56-9DB4-4DB4F0B6F4E3}_is1'
 
 $workDirectory = Join-Path ([System.IO.Path]::GetTempPath()) 'hyperkey-installer-verification'
 $backupDirectory = Join-Path $workDirectory 'appdata-backup'
@@ -97,14 +106,12 @@ function Set-StartupRegistration {
 }
 
 function Get-InstalledVersion {
-    $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installedExecutable)
-    if ([string]::IsNullOrWhiteSpace($versionInfo.ProductVersion)) {
+    $key = Get-Item -LiteralPath $uninstallKeyPath -ErrorAction SilentlyContinue
+    if ($null -eq $key) {
         return ''
     }
 
-    # The build appends "+<commit>" to the informational version; AppVersion.cs
-    # splits on the same character before displaying it.
-    return ($versionInfo.ProductVersion -split '\+', 2)[0]
+    return [string]$key.GetValue('DisplayVersion', '')
 }
 
 function Get-LogTail {
@@ -161,7 +168,7 @@ function Build-Installer {
     param([string]$Version)
 
     Write-Step "Building installer $Version"
-    # Out-Host keeps the publish log visible without letting it become the return value.
+    # Out-Host keeps the build log visible without letting it become the return value.
     # package-installer.ps1 signals failure by throwing, which propagates here, so the
     # Assert-FileExists below is the only guard this needs.
     & $packageScriptPath -Version $Version | Out-Host
@@ -226,6 +233,7 @@ function Set-UserState {
     Write-Step 'Seeding settings and launch-at-login as a user would leave them'
 
     New-Item -ItemType Directory -Path $appDataDirectory -Force | Out-Null
+    # Same document the C# app wrote; the Rust parser reads this schema.
     $settings = @'
 {
   "schemaVersion": 2,
@@ -262,7 +270,7 @@ function Test-Upgrade {
     Invoke-Setup -Path $setupPath -Activity "upgrade-$ToVersion"
 
     Assert-Condition -Condition ((Get-InstalledVersion) -eq $ToVersion) `
-        -Message "The installed executable reports version $ToVersion"
+        -Message "The installed copy reports version $ToVersion"
 
     $preservedTrigger = (Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).trigger
     Assert-Condition -Condition ($preservedTrigger -eq 'F7') `
@@ -284,6 +292,8 @@ function Test-CleanUninstall {
     Assert-PathMissing -Path $startMenuShortcut -Message 'The Start Menu shortcut is removed'
     Assert-PathMissing -Path $installDirectory -Message 'The install directory is removed'
     Assert-PathMissing -Path $appDataDirectory -Message 'The settings directory is removed'
+    Assert-Condition -Condition ($null -eq (Get-Item -LiteralPath $uninstallKeyPath -ErrorAction SilentlyContinue)) `
+        -Message 'The uninstall registration is removed'
     Assert-Condition -Condition ($null -eq (Get-StartupRegistration)) `
         -Message 'Launch-at-login registration is removed'
 }
@@ -292,11 +302,23 @@ if (-not (Test-Path -LiteralPath $packageScriptPath -PathType Leaf)) {
     throw "The packaging script was not found: $packageScriptPath"
 }
 
+if (-not [string]::IsNullOrWhiteSpace($BaselineSetupPath)) {
+    if ($SkipUpgrade) {
+        throw '-SkipUpgrade cannot be combined with -BaselineSetupPath; upgrading over the baseline is the check.'
+    }
+
+    if (-not (Test-Path -LiteralPath $BaselineSetupPath -PathType Leaf)) {
+        throw "The baseline installer was not found: $BaselineSetupPath"
+    }
+
+    $BaselineSetupPath = (Resolve-Path -LiteralPath $BaselineSetupPath).Path
+}
+
 if (Test-Path -LiteralPath $installDirectory) {
     throw "Hyperkey is already installed at $installDirectory. Uninstall it before running this script so real user data is not touched."
 }
 
-$runningInstances = @(Get-Process -Name 'Hyperkey.App' -ErrorAction SilentlyContinue)
+$runningInstances = @(Get-Process -Name 'Hyperkey.App', 'hyperkey-app' -ErrorAction SilentlyContinue)
 if ($runningInstances.Count -gt 0) {
     throw "Hyperkey is running. Quit it from the tray and run this script again; the single-instance check needs a clean session."
 }
@@ -321,26 +343,51 @@ if ($hadExistingAppData) {
 try {
     $startedVerification = $true
 
-    $setupPath = Build-Installer -Version $baseVersion
-    Invoke-Setup -Path $setupPath -Activity "install-$baseVersion"
+    if ([string]::IsNullOrWhiteSpace($BaselineSetupPath)) {
+        $setupPath = Build-Installer -Version $baseVersion
+        Invoke-Setup -Path $setupPath -Activity "install-$baseVersion"
 
-    Write-Step 'Checking what a clean install puts on disk'
-    Assert-FileExists -Path $installedExecutable -Message 'The executable is installed'
-    Assert-FileExists -Path $uninstallerPath -Message 'The uninstaller is installed'
-    Assert-FileExists -Path $startMenuShortcut -Message 'The Start Menu shortcut is installed'
-    Assert-Condition -Condition ((Get-InstalledVersion) -eq $baseVersion) `
-        -Message "The installed executable reports version $baseVersion"
-    Assert-Condition -Condition ((Get-StartupRegistration) -eq $savedStartupRegistration) `
-        -Message 'Installing leaves launch-at-login registration untouched'
+        Write-Step 'Checking what a clean install puts on disk'
+        Assert-FileExists -Path $installedExecutable -Message 'The executable is installed'
+        Assert-FileExists -Path $uninstallerPath -Message 'The uninstaller is installed'
+        Assert-FileExists -Path $startMenuShortcut -Message 'The Start Menu shortcut is installed'
+        Assert-Condition -Condition ((Get-InstalledVersion) -eq $baseVersion) `
+            -Message "The installed copy reports version $baseVersion"
+        Assert-Condition -Condition ((Get-StartupRegistration) -eq $savedStartupRegistration) `
+            -Message 'Installing leaves launch-at-login registration untouched'
 
-    Test-StartupAndSingleInstance
-    Set-UserState
+        Test-StartupAndSingleInstance
+        Set-UserState
 
-    if ($SkipUpgrade) {
-        Write-Step 'Skipping the upgrade check (-SkipUpgrade)'
+        if ($SkipUpgrade) {
+            Write-Step 'Skipping the upgrade check (-SkipUpgrade)'
+        }
+        else {
+            Test-Upgrade -FromVersion $baseVersion -ToVersion $upgradeVersion
+        }
     }
     else {
-        Test-Upgrade -FromVersion $baseVersion -ToVersion $upgradeVersion
+        Write-Step "Installing the baseline setup ($BaselineSetupPath)"
+        Invoke-Setup -Path $BaselineSetupPath -Activity 'install-baseline'
+
+        Write-Step 'Checking what the baseline install puts on disk'
+        Assert-FileExists -Path $installedExecutable -Message 'The baseline executable is installed'
+        Assert-FileExists -Path $uninstallerPath -Message 'The baseline uninstaller is installed'
+        Assert-FileExists -Path $startMenuShortcut -Message 'The baseline Start Menu shortcut is installed'
+        $baselineVersion = Get-InstalledVersion
+        Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($baselineVersion)) `
+            -Message 'The baseline install reports a version'
+        Assert-Condition -Condition ($baselineVersion -ne $upgradeVersion) `
+            -Message "The baseline version $baselineVersion differs from the upgrade version $upgradeVersion"
+        Assert-Condition -Condition ((Get-StartupRegistration) -eq $savedStartupRegistration) `
+            -Message 'Installing the baseline leaves launch-at-login registration untouched'
+
+        Set-UserState
+        Test-Upgrade -FromVersion $baselineVersion -ToVersion $upgradeVersion
+
+        # The launch check runs on the upgraded files so it always exercises the
+        # Rust build, never the baseline binary.
+        Test-StartupAndSingleInstance
     }
 
     Test-CleanUninstall
@@ -376,6 +423,10 @@ finally {
             if ($hadExistingAppData) {
                 Copy-Item -LiteralPath $backupDirectory -Destination $appDataDirectory -Recurse -Force
             }
+
+            # The script refused to start if Hyperkey was already installed, so an
+            # uninstall key left behind can only have come from this run.
+            Remove-Item -LiteralPath $uninstallKeyPath -Recurse -Force -ErrorAction SilentlyContinue
 
             if ($null -eq $savedStartupRegistration) {
                 Remove-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -ErrorAction SilentlyContinue
