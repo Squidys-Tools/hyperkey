@@ -69,8 +69,9 @@ have deleted your settings. The backup is the only copy, so copy it back:
   -> %LOCALAPPDATA%\Hyperkey\settings.json
 ```
 
-The launch-at-login value is restored from the backup directory only if the run reached that step, so
-re-enable "Launch at login" in settings afterwards if the value is missing.
+The launch-at-login value is restored from a copy the script holds in memory, not from the backup
+directory, and only if the run reached that step, so re-enable "Launch at login" in settings
+afterwards if the value is missing.
 
 CI runs this as its own job on every pull request, downloading the latest C# release
 (`Hyperkey-Setup-0.1.1.exe` from the `v0.1.1` tag) as the upgrade baseline.
