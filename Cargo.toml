@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
 members = [
-    "hyperkey-core",
-    "hyperkey-input",
-    "hyperkey-app",
+    "crates/hyperkey-core",
+    "crates/hyperkey-input",
+    "crates/hyperkey-app",
 ]
 
 [workspace.package]
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 
