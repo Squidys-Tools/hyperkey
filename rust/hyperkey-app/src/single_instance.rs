@@ -1,5 +1,7 @@
 //! Single-instance guard, mirroring the C# named-mutex service. The handle is
-//! held for the process lifetime so a second launch exits immediately.
+//! held for the process lifetime so a second launch exits immediately — after
+//! asking the running instance to raise its settings window.
+use crate::session_window;
 use std::iter::once;
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
@@ -24,6 +26,13 @@ pub fn acquire() -> Option<SingleInstance> {
         Ok(handle) => Some(SingleInstance(handle)),
         Err(_) => None,
     }
+}
+
+/// Best-effort second-instance hand-off: broadcast the registered
+/// show-settings message so the running daemon raises its window. Reports
+/// whether the broadcast was posted.
+pub fn notify_existing() -> bool {
+    session_window::broadcast_show_settings()
 }
 
 impl Drop for SingleInstance {
