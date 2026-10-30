@@ -62,8 +62,6 @@ const INVALID_KEY_HINT: &str =
     "That key can't be used as the trigger. Try another key, or press Esc to cancel.";
 const MODIFIER_CHOICE_HINT: &str = "Choose one or more modifiers.";
 const MODIFIER_REQUIRED_HINT: &str = "Choose at least one modifier.";
-/// The Hyperkey accent, matching the C# SystemAccentColor resource.
-const ACCENT: Color = Color::from_rgb8(0x0B, 0x64, 0xD2);
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -552,8 +550,8 @@ fn refresh_tray(state: &mut State) {
 
 fn open_settings_window() -> (window::Id, Task<window::Id>) {
     window::open(window::Settings {
-        size: Size::new(560.0, 700.0),
-        min_size: Some(Size::new(460.0, 560.0)),
+        size: Size::new(940.0, 640.0),
+        min_size: Some(Size::new(820.0, 540.0)),
         position: window::Position::Centered,
         // Closing hides the window; the daemon keeps running in the tray.
         exit_on_close_request: false,
@@ -681,22 +679,30 @@ fn view(state: &State, _window: window::Id) -> Element<'_, Message> {
     settings_view::view(state)
 }
 
-/// The Hyperkey theme: the standard light or dark palette with the accent
-/// color pinned to the Hyperkey blue (#0B64D2), following the system mode.
-/// Before the first SystemTheme message arrives `Mode::None` resolves to
-/// the light palette.
+/// The Hyperkey theme, following the system mode. In dark mode it uses the
+/// design palette from the WPF prototype (canvas #1B1C20, accent #4C8DF6);
+/// in light mode it keeps iced's light palette with the deeper accent
+/// (#3B74D8). Before the first SystemTheme message arrives `Mode::None`
+/// resolves to the light palette.
 fn theme(state: &State, _window: window::Id) -> Theme {
-    let base = match state.system_mode {
-        theme::Mode::Dark => Palette::DARK,
-        theme::Mode::None | theme::Mode::Light => Palette::LIGHT,
-    };
-    Theme::custom(
-        "Hyperkey",
-        Palette {
-            primary: ACCENT,
-            ..base
-        },
-    )
+    match state.system_mode {
+        theme::Mode::Dark => Theme::custom(
+            "Hyperkey Dark",
+            Palette {
+                background: settings_view::palette::CANVAS,
+                text: Color::WHITE,
+                primary: settings_view::palette::ACCENT,
+                ..Palette::DARK
+            },
+        ),
+        theme::Mode::None | theme::Mode::Light => Theme::custom(
+            "Hyperkey",
+            Palette {
+                primary: settings_view::palette::ACCENT_STRONG,
+                ..Palette::LIGHT
+            },
+        ),
+    }
 }
 
 fn main() -> iced::Result {
