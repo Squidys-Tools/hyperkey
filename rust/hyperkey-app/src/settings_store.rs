@@ -113,7 +113,8 @@ impl SettingsStore {
             ),
             None => format!(
                 "Hyperkey loaded safe defaults. The settings file could not be read: \
-                 {fatal_error}."
+                 {fatal_error}. It could not be moved aside, so it will be replaced \
+                 the next time settings are saved."
             ),
         };
 
