@@ -1,10 +1,62 @@
-//! Maps iced's physical key codes to Win32 virtual-key codes for the trigger
-//! rebind capture. iced reports keys as winit `Code`s (physical positions);
-//! `TriggerKey` works in virtual-key codes, so capture needs this table.
-//! Returning `None` means the key has no plain virtual-key mapping at all —
-//! the caller shows the generic "can't be used" hint, identical to what the
-//! C# window did when `KeyInterop.VirtualKeyFromKey` could not map a key.
+//! Maps iced key presses to Win32 virtual-key codes for the trigger rebind
+//! capture. `TriggerKey` works in virtual-key codes, and the hook matches on
+//! the virtual key the active keyboard layout produces. iced reports a press
+//! as both a physical `Code` (position) and a logical `Key` (what it types),
+//! so printable keys are resolved from the logical key and everything else
+//! from the fixed table. Returning `None` means the key has no virtual-key
+//! mapping at all — the caller shows the generic "can't be used" hint,
+//! identical to what the C# window did when `KeyInterop.VirtualKeyFromKey`
+//! could not map a key.
+use iced::keyboard::Key;
 use iced::keyboard::key::Code;
+use windows::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
+
+/// The virtual-key code the hook will see for this press. A printable key is
+/// resolved through the active layout from the character it types, because
+/// AZERTY, Dvorak, and similar layouts put letters and punctuation at other
+/// positions than the US table assumes. Numpad keys, named keys, and function
+/// keys keep their fixed codes, since those do not vary by layout.
+pub fn trigger_virtual_key(key: &Key, code: Code) -> Option<u16> {
+    if !is_numpad(code)
+        && let Key::Character(text) = key
+    {
+        let mut characters = text.chars();
+        if let (Some(character), None) = (characters.next(), characters.next())
+            && let Ok(unit) = u16::try_from(character)
+        {
+            // SAFETY: FFI query with no preconditions or retained state.
+            let scan = unsafe { VkKeyScanW(unit) };
+            // -1 means the active layout cannot type this character.
+            if scan != -1 {
+                return Some((scan as u16) & 0x00FF);
+            }
+        }
+    }
+
+    virtual_key_code(code)
+}
+
+fn is_numpad(code: Code) -> bool {
+    matches!(
+        code,
+        Code::Numpad0
+            | Code::Numpad1
+            | Code::Numpad2
+            | Code::Numpad3
+            | Code::Numpad4
+            | Code::Numpad5
+            | Code::Numpad6
+            | Code::Numpad7
+            | Code::Numpad8
+            | Code::Numpad9
+            | Code::NumpadAdd
+            | Code::NumpadComma
+            | Code::NumpadDecimal
+            | Code::NumpadDivide
+            | Code::NumpadMultiply
+            | Code::NumpadSubtract
+    )
+}
 
 /// The Win32 virtual-key code for a physical key position, when one exists.
 /// Includes keys outside the core trigger allowlist (arrows, the editing
@@ -160,6 +212,7 @@ pub fn is_modifier_or_system(code: Code) -> bool {
 mod tests {
     use super::*;
     use hyperkey_core::keys::TriggerKey;
+    use iced::keyboard::key::Named;
 
     #[test]
     fn allowlist_keys_map_to_their_virtual_key_codes() {
@@ -242,6 +295,24 @@ mod tests {
         ] {
             assert!(is_modifier_or_system(code), "{code:?}");
         }
+    }
+
+    #[test]
+    fn numpad_and_named_keys_keep_fixed_codes_whatever_the_layout() {
+        // These branches never consult the active layout, so the assertions
+        // hold on any keyboard layout.
+        assert_eq!(
+            Some(0x6E),
+            trigger_virtual_key(&Key::Character(".".into()), Code::NumpadDecimal)
+        );
+        assert_eq!(
+            Some(0x09),
+            trigger_virtual_key(&Key::Named(Named::Tab), Code::Tab)
+        );
+        assert_eq!(
+            Some(0x87),
+            trigger_virtual_key(&Key::Named(Named::F24), Code::F24)
+        );
     }
 
     #[test]

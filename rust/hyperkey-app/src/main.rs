@@ -351,6 +351,7 @@ fn toggle_modifier(state: &mut State, modifier: OutputModifier, selected: bool) 
 /// capture cannot bind itself while it is still held.
 fn capture_trigger_key(state: &mut State, event: &keyboard::Event) {
     let keyboard::Event::KeyPressed {
+        key,
         physical_key: Physical::Code(code),
         modifiers,
         repeat: false,
@@ -375,7 +376,7 @@ fn capture_trigger_key(state: &mut State, event: &keyboard::Event) {
         {
             state.trigger_hint = MODIFIER_KEY_HINT;
         }
-        code => match keymap::virtual_key_code(*code).and_then(TriggerKey::try_create) {
+        code => match keymap::trigger_virtual_key(key, *code).and_then(TriggerKey::try_create) {
             Some(trigger) => match state.settings.with_trigger(trigger) {
                 Ok(settings) => update_settings(state, settings, true),
                 Err(_) => state.trigger_hint = INVALID_KEY_HINT,
