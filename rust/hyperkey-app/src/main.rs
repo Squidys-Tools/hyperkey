@@ -550,8 +550,8 @@ fn refresh_tray(state: &mut State) {
 
 fn open_settings_window() -> (window::Id, Task<window::Id>) {
     window::open(window::Settings {
-        size: Size::new(940.0, 640.0),
-        min_size: Some(Size::new(820.0, 540.0)),
+        size: Size::new(760.0, 540.0),
+        min_size: Some(Size::new(720.0, 500.0)),
         position: window::Position::Centered,
         // Closing hides the window; the daemon keeps running in the tray.
         exit_on_close_request: false,
