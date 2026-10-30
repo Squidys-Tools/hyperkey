@@ -15,7 +15,7 @@ Your real Ctrl, Alt, and Shift keys keep working exactly as before. Hyperkey add
 
 ## Install
 
-1. Download `Hyperkey-Setup-x64.exe` from the [releases page](https://github.com/Squidys-Tools/hyperkey/releases).
+1. Download the `Hyperkey-Setup-*.exe` installer from the [releases page](https://github.com/Squidys-Tools/hyperkey/releases).
 2. Run it. The installer is per-user and needs no administrator access.
 3. Hyperkey starts in the system tray. Click the tray icon to open settings.
 
@@ -55,4 +55,4 @@ Uninstall Hyperkey from Windows Settings, "Apps", "Installed apps". This removes
 
 ## Development
 
-Hyperkey is free and open source. If you want to build it yourself or help out, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Hyperkey is a Rust app: the settings window uses iced and Win32 interop goes through the `windows` crate. It is free and open source. If you want to build it yourself or help out, see [CONTRIBUTING.md](CONTRIBUTING.md).
