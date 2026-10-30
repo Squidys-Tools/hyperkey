@@ -10,13 +10,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$projectPath = Join-Path $repositoryRoot 'src\Hyperkey.App\Hyperkey.App.csproj'
+$rustWorkspacePath = Join-Path $repositoryRoot 'rust'
 $versionPropsPath = Join-Path $repositoryRoot 'Directory.Build.props'
-$publishPath = Join-Path $repositoryRoot 'publish\win-x64'
+$publishPath = Join-Path $repositoryRoot 'publish\app'
 $installerScriptPath = Join-Path $repositoryRoot 'installer\Hyperkey.iss'
 
-if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
-    throw "The Hyperkey app project was not found: $projectPath"
+if (-not (Test-Path -LiteralPath (Join-Path $rustWorkspacePath 'Cargo.toml') -PathType Leaf)) {
+    throw "The Rust workspace was not found: $rustWorkspacePath"
 }
 
 if (-not (Test-Path -LiteralPath $installerScriptPath -PathType Leaf)) {
@@ -37,24 +37,44 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "Version must use three numeric components, for example 0.1.0. Received: $Version"
 }
 
-$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-if ($null -eq $dotnet) {
-    throw 'The .NET SDK was not found on PATH.'
+$cargo = Get-Command cargo -ErrorAction SilentlyContinue
+if ($null -eq $cargo) {
+    throw 'The Rust toolchain was not found on PATH.'
 }
 
-Write-Host "Publishing Hyperkey $Version ($Configuration, win-x64)..."
-& $dotnet.Source publish $projectPath `
-    --configuration $Configuration `
-    --runtime win-x64 `
-    --self-contained true `
-    --output $publishPath `
-    --property:Platform=x64 `
-    --property:Version=$Version
-
-$publishedExecutable = Join-Path $publishPath 'Hyperkey.App.exe'
-if (-not (Test-Path -LiteralPath $publishedExecutable -PathType Leaf)) {
-    throw "The published executable was not created: $publishedExecutable"
+$cargoArguments = @('build', '--package', 'hyperkey-app')
+$profileDirectory = 'debug'
+if ($Configuration -eq 'Release') {
+    $cargoArguments += '--release'
+    $profileDirectory = 'release'
 }
+
+Write-Host "Building hyperkey-app $Version ($Configuration)..."
+Push-Location $rustWorkspacePath
+try {
+    & $cargo.Source @cargoArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Pop-Location
+}
+
+$builtExecutable = Join-Path $rustWorkspacePath "target\$profileDirectory\hyperkey-app.exe"
+if (-not (Test-Path -LiteralPath $builtExecutable -PathType Leaf)) {
+    throw "The built executable was not created: $builtExecutable"
+}
+
+# The setup ships the Rust binary under the C# executable name. Combined with the
+# unchanged AppId and install directory, existing installs upgrade in place and
+# their shortcuts and launch-at-login value keep pointing at a real file.
+if (Test-Path -LiteralPath $publishPath) {
+    Remove-Item -LiteralPath $publishPath -Recurse -Force
+}
+New-Item -ItemType Directory -Path $publishPath -Force | Out-Null
+$stagedExecutable = Join-Path $publishPath 'Hyperkey.App.exe'
+Copy-Item -LiteralPath $builtExecutable -Destination $stagedExecutable
 
 $innoSetupCandidates = @()
 $innoSetupCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -82,6 +102,9 @@ if ($null -eq $innoSetup) {
 
 Write-Host "Building installer with $innoSetup..."
 & $innoSetup "/DAppVersion=$Version" $installerScriptPath
+if ($LASTEXITCODE -ne 0) {
+    throw "ISCC failed with exit code $LASTEXITCODE."
+}
 
 $installerPath = Join-Path $repositoryRoot "publish\installer\Hyperkey-Setup-$Version.exe"
 if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
