@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using Hyperkey.Core;
 using Hyperkey.Input;
+using Xunit;
 
 namespace Hyperkey.Core.Tests;
 
@@ -9,11 +10,22 @@ namespace Hyperkey.Core.Tests;
 /// End-to-end coverage for the generalized trigger against the real Windows
 /// input stack: a live <see cref="InputEngine"/> plus a second low-level hook
 /// that observes exactly what survives the engine. The trigger under test is
-/// F24 and the chord key is F13 — both inert everywhere, so the test types
+/// F24 and the chord key is F23 — both inert everywhere, so the tests type
 /// nothing observable no matter which window has focus. Uses only
 /// process-local hooks, SendInput, and async key state, so it needs no window,
 /// no focus, and no text field.
 /// </summary>
+public class EngineLoopbackTests
+{
+    [Fact]
+    public void GeneralizedTriggerWorksEndToEndOnTheRealHook() =>
+        EngineLoopback.RunTriggerCycle();
+
+    [Fact]
+    public void DisableMidChordReleasesHeldModifiers() =>
+        EngineLoopback.RunDisableMidChord();
+}
+
 internal static class EngineLoopback
 {
     private const uint WhKeyboardLl = 13;
@@ -21,21 +33,28 @@ internal static class EngineLoopback
     private const uint WmKeyUp = 0x0101;
     private const uint WmSysKeyDown = 0x0104;
     private const uint WmSysKeyUp = 0x0105;
-    private const uint WmQuit = 0x0012;
     private const uint PmRemove = 0x0001;
     private const uint KeyEventFlagKeyUp = 0x0002;
 
     private const ushort TriggerCode = 0x87; // F24.
-    private const ushort ChordCode = 0x86; // F13.
+    private const ushort ChordCode = 0x86; // F23.
 
     private static readonly object s_gate = new();
     private static readonly List<string> s_log = new();
     private static bool s_done;
-    private static uint s_mainThreadId;
+    private static bool s_disableRequested;
+    private static bool s_disableDone;
     private static IntPtr s_hookHandle;
     private static LowLevelKeyboardProc? s_hookProc;
+    private static InputEngine? s_engine;
 
-    public static void GeneralizedTriggerWorksEndToEndOnTheRealHook()
+    public static void RunTriggerCycle() =>
+        RunLoopback(SenderMain, AssertLogSequence);
+
+    public static void RunDisableMidChord() =>
+        RunLoopback(DisableSenderMain, AssertDisableLogSequence);
+
+    private static void RunLoopback(ThreadStart senderMain, Action<List<string>> assert)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -54,13 +73,15 @@ internal static class EngineLoopback
         {
             s_log.Clear();
             s_done = false;
+            s_disableRequested = false;
+            s_disableDone = false;
+            s_engine = engine;
         }
 
         // Windows calls low-level hooks in reverse installation order (most
         // recently installed runs first), so the observation hook is installed
         // BEFORE the engine starts: the engine then runs first, and anything it
         // suppresses never reaches this observer.
-        s_mainThreadId = GetCurrentThreadId();
         s_hookProc = TestHookCallback;
         s_hookHandle = SetWindowsHookEx(WhKeyboardLl, s_hookProc, GetModuleHandle(null), 0);
         if (s_hookHandle == IntPtr.Zero)
@@ -75,7 +96,7 @@ internal static class EngineLoopback
                 throw new InvalidOperationException("The engine under test could not be started.");
             }
 
-            var sender = new Thread(SenderMain) { IsBackground = true };
+            var sender = new Thread(senderMain) { IsBackground = true };
             sender.Start();
             PumpMessages(TimeSpan.FromSeconds(25));
             if (!sender.Join(TimeSpan.FromSeconds(5)))
@@ -83,10 +104,21 @@ internal static class EngineLoopback
                 throw new InvalidOperationException("The loopback sender thread did not finish.");
             }
 
-            AssertLogSequence();
+            List<string> log;
+            lock (s_gate)
+            {
+                log = new List<string>(s_log);
+            }
+
+            assert(log);
         }
         finally
         {
+            lock (s_gate)
+            {
+                s_engine = null;
+            }
+
             engine.Stop();
             if (s_hookHandle != IntPtr.Zero)
             {
@@ -94,7 +126,7 @@ internal static class EngineLoopback
                 s_hookHandle = IntPtr.Zero;
             }
 
-            ReleaseAllModifiers();
+            ReleaseAllKeys();
             GC.KeepAlive(s_hookProc);
         }
     }
@@ -122,15 +154,45 @@ internal static class EngineLoopback
             SendKey(TriggerCode, isKeyUp: true);
             Thread.Sleep(400);
             RecordAsyncState("post");
-
+        }
+        finally
+        {
             lock (s_gate)
             {
                 s_done = true;
             }
         }
+    }
+
+    private static void DisableSenderMain()
+    {
+        try
+        {
+            Thread.Sleep(800);
+
+            // Start a chord but never release the trigger: the engine is
+            // stopped mid-chord instead, which must drop the held modifiers.
+            SendKey(TriggerCode, isKeyUp: false);
+            Thread.Sleep(350);
+            SendKey(ChordCode, isKeyUp: false);
+            Thread.Sleep(400);
+            RecordAsyncState("mid");
+
+            lock (s_gate)
+            {
+                s_disableRequested = true;
+            }
+
+            Thread.Sleep(1500);
+            RecordAsyncState("post");
+            Thread.Sleep(200);
+        }
         finally
         {
-            PostThreadMessage(s_mainThreadId, WmQuit, UIntPtr.Zero, IntPtr.Zero);
+            lock (s_gate)
+            {
+                s_done = true;
+            }
         }
     }
 
@@ -145,22 +207,9 @@ internal static class EngineLoopback
         }
     }
 
-    private static void AssertLogSequence()
+    private static void AssertLogSequence(List<string> log)
     {
-        List<string> log;
-        lock (s_gate)
-        {
-            log = new List<string>(s_log);
-        }
-
-        void Require(bool condition, string message)
-        {
-            if (!condition)
-            {
-                throw new InvalidOperationException(
-                    message + Environment.NewLine + "Observed: " + string.Join(" | ", log));
-            }
-        }
+        void Require(bool condition, string message) => EngineLoopback.Require(condition, message, log);
 
         // Raw trigger events must never survive the engine.
         Require(!log.Any(line => line == "EVT:DOWN:0x87:R"), "Raw F24 key-down reached the observer; the trigger was not suppressed.");
@@ -175,7 +224,7 @@ internal static class EngineLoopback
         // (Modifier presses interleave asynchronously, so only order matters.)
         var chordDown = log.IndexOf("EVT:DOWN:0x86:R");
         var chordUp = log.IndexOf("EVT:UP:0x86:R");
-        Require(chordDown >= 0 && chordUp > chordDown, "Expected the raw F13 down/up pair to be forwarded during the chord.");
+        Require(chordDown >= 0 && chordUp > chordDown, "Expected the raw F23 down/up pair to be forwarded during the chord.");
         Require(chordDown > replayUp, "Expected the chord to happen after the tap replay.");
 
         // Output modifiers are physically held mid-chord and released after.
@@ -183,6 +232,31 @@ internal static class EngineLoopback
         var post = log.FirstOrDefault(line => line.StartsWith("ASYNC-post:", StringComparison.Ordinal));
         Require(mid == "ASYNC-mid:Ctrl=True:Alt=True:Shift=True", "Expected Ctrl+Alt+Shift to be physically held mid-chord.");
         Require(post == "ASYNC-post:Ctrl=False:Alt=False:Shift=False", "Expected all output modifiers to be released after the chord.");
+    }
+
+    private static void AssertDisableLogSequence(List<string> log)
+    {
+        void Require(bool condition, string message) => EngineLoopback.Require(condition, message, log);
+
+        // The trigger down was suppressed and the chord key forwarded.
+        Require(!log.Any(line => line == "EVT:DOWN:0x87:R"), "Raw F24 key-down reached the observer; the trigger was not suppressed.");
+        Require(log.Any(line => line == "EVT:DOWN:0x86:R"), "Expected the raw F23 key-down to be forwarded during the chord.");
+
+        // Modifiers were physically held mid-chord, and stopping the engine
+        // mid-chord released them even though the trigger stayed held.
+        var mid = log.FirstOrDefault(line => line.StartsWith("ASYNC-mid:", StringComparison.Ordinal));
+        var post = log.FirstOrDefault(line => line.StartsWith("ASYNC-post:", StringComparison.Ordinal));
+        Require(mid == "ASYNC-mid:Ctrl=True:Alt=True:Shift=True", "Expected Ctrl+Alt+Shift to be physically held mid-chord.");
+        Require(post == "ASYNC-post:Ctrl=False:Alt=False:Shift=False", "Expected all output modifiers to be released when the engine was disabled mid-chord.");
+    }
+
+    private static void Require(bool condition, string message, List<string> log)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(
+                message + Environment.NewLine + "Observed: " + string.Join(" | ", log));
+        }
     }
 
     private static void PumpMessages(TimeSpan timeout)
@@ -194,21 +268,38 @@ internal static class EngineLoopback
             while (PeekMessage(out var message, IntPtr.Zero, 0, 0, PmRemove))
             {
                 drained = true;
-                if (message.Message == WmQuit)
-                {
-                    return;
-                }
 
+                // No WM_QUIT fast-path on purpose: a quit message posted by a
+                // previous run can sit in this thread's queue when it starts,
+                // and treating it as "done" would end the pump before the hook
+                // ever sees an event. Dispatch everything; wait only on s_done.
                 TranslateMessage(ref message);
                 DispatchMessage(ref message);
             }
 
+            var requestDisable = false;
+            InputEngine? engine = null;
             lock (s_gate)
             {
-                if (s_done && !drained)
+                if (s_disableRequested && !s_disableDone)
+                {
+                    s_disableDone = true;
+                    requestDisable = true;
+                    engine = s_engine;
+                }
+
+                if (s_done && !drained && !requestDisable)
                 {
                     return;
                 }
+            }
+
+            // Stop the engine mid-chord from the pump thread so its hook can
+            // shut down cleanly while the sender keeps holding the keys.
+            if (requestDisable)
+            {
+                engine?.Stop();
+                continue;
             }
 
             Thread.Sleep(20);
@@ -281,9 +372,11 @@ internal static class EngineLoopback
         }
     }
 
-    private static void ReleaseAllModifiers()
+    private static void ReleaseAllKeys()
     {
-        foreach (var code in new ushort[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 })
+        // The trigger and chord keys may still be logically held if a test
+        // stopped mid-chord; release them plus every output modifier.
+        foreach (var code in new ushort[] { TriggerCode, ChordCode, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 })
         {
             SendKey(code, isKeyUp: true);
         }
@@ -362,9 +455,6 @@ internal static class EngineLoopback
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? moduleName);
 
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
-
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PeekMessage(out MSG message, IntPtr windowHandle, uint minimumMessage, uint maximumMessage, uint removeMessage);
@@ -375,10 +465,6 @@ internal static class EngineLoopback
 
     [DllImport("user32.dll")]
     private static extern IntPtr DispatchMessage(ref MSG message);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
