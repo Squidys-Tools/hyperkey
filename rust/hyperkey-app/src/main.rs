@@ -96,8 +96,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 window::close(id)
             }
         }
-        // The engine has no status callback; the tick re-renders the status
-        // line and mirrors the C# failed-status diagnostic.
+        // The engine publishes status through subscribe(); the app still polls
+        // on a slow tick to re-render the status line and mirror the C#
+        // failed-status diagnostic.
         Message::Tick => {
             if state.engine.status() == InputEngineStatus::Failed
                 && state.diagnostic_message.is_none()
@@ -166,9 +167,10 @@ fn subscription(_state: &State) -> Subscription<Message> {
     ])
 }
 
-/// The engine has no status callback, so a slow tick refreshes the status line
-/// and mirrors the C# failed-status diagnostic. The default thread-pool
-/// executor has no timer, hence a dedicated sleeping thread.
+/// The engine offers subscribe() for status changes, but the daemon polls on
+/// a slow tick to refresh the status line and mirror the C# failed-status
+/// diagnostic. The default thread-pool executor has no timer, hence a
+/// dedicated sleeping thread.
 fn status_tick() -> impl iced::futures::stream::Stream<Item = Message> {
     iced::stream::channel(4, |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
         let _ = std::thread::Builder::new()
@@ -202,8 +204,11 @@ fn tray_events() -> impl iced::futures::stream::Stream<Item = Message> {
                         tray::MENU_ID_QUIT => Message::Quit,
                         _ => continue,
                     };
-                    if menu_sender.clone().try_send(message).is_err() {
-                        break;
+                    match menu_sender.clone().try_send(message) {
+                        // A full channel drops one menu event; only a dead
+                        // receiver stops the pump.
+                        Err(error) if error.is_disconnected() => break,
+                        _ => {}
                     }
                 }
             });
@@ -217,9 +222,11 @@ fn tray_events() -> impl iced::futures::stream::Stream<Item = Message> {
                         button: tray_icon::MouseButton::Left,
                         ..
                     } = event
-                        && sender.clone().try_send(Message::OpenSettings).is_err()
                     {
-                        break;
+                        match sender.clone().try_send(Message::OpenSettings) {
+                            Err(error) if error.is_disconnected() => break,
+                            _ => {}
+                        }
                     }
                 }
             });

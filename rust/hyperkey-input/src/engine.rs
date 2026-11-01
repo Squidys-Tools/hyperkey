@@ -228,6 +228,16 @@ impl InputEngine {
             *lock(&self.inner.hook_ready) = false;
             self.inner.hook_thread_id.store(0, Ordering::SeqCst);
             set_status_locked(&mut lifecycle, InputEngineStatus::Starting, None);
+            // Publish while still holding the lock and before the hook thread
+            // exists, so subscribers can never see Running before Starting.
+            lifecycle.event_senders.retain(|sender| {
+                sender
+                    .send(EngineEvent::StatusChanged {
+                        status: InputEngineStatus::Starting,
+                        error: None,
+                    })
+                    .is_ok()
+            });
 
             let inner = Arc::clone(&self.inner);
             let spawned = std::thread::Builder::new()
@@ -245,8 +255,6 @@ impl InputEngine {
                 }
             }
         }
-
-        publish_status(&self.inner, InputEngineStatus::Starting, None);
 
         if !wait_for_hook_ready(&self.inner, Duration::from_secs(3)) {
             self.stop();
@@ -413,6 +421,10 @@ impl InputEngine {
                     Some(WatchdogControl { stop, thread });
             }
             Err(error) => {
+                // Without a watchdog a running hook has no self-heal, so stop
+                // the engine instead of leaving it running but flagged Failed
+                // with no way forward but a manual stop().
+                self.stop();
                 set_status(
                     &self.inner,
                     InputEngineStatus::Failed,

@@ -80,7 +80,7 @@ jobs:
 
       - name: Run core tests
         working-directory: rust
-        run: cargo test -p hyperkey-core
+        run: cargo test --workspace
 
       - name: Build app
         working-directory: rust
