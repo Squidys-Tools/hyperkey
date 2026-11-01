@@ -72,11 +72,38 @@ function Assert-FileExists {
 function Assert-PathMissing {
     param(
         [string]$Path,
-        [string]$Message
+        [string]$Message,
+        [int]$WaitSeconds = 0,
+        [switch]$AllowEmptyDirectory
     )
 
-    Assert-Condition -Condition (-not (Test-Path -LiteralPath $Path)) `
-        -Message "$Message ($Path)"
+    # Inno's uninstaller finishes some deletions in a spawned helper after
+    # unins000.exe exits, so callers can wait briefly for the end state.
+    $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+    while ((Test-Path -LiteralPath $Path) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        $leftovers = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName })
+        # The shell and Defender can hold {app} open past the single
+        # RemoveDirectory attempt Inno makes, leaving an empty shell dir no
+        # payload of ours lives in. Content is what must be gone.
+        if ($AllowEmptyDirectory -and $leftovers.Count -eq 0) {
+            Write-Check "$Message ($Path; empty shell dir left behind)"
+            return
+        }
+        $detail = if ($leftovers.Count -eq 0) {
+            'the path still exists'
+        }
+        else {
+            "leftovers: $($leftovers -join ', ')"
+        }
+        Assert-Condition -Condition $false -Message "$Message ($Path; $detail)"
+    }
+
+    Write-Check "$Message ($Path)"
 }
 
 function Get-StartupRegistration {
@@ -244,7 +271,8 @@ function Set-UserState {
     "Alt"
   ],
   "launchAtStartup": true,
-  "launchToTray": true
+  "launchToTray": true,
+  "tapBehavior": "CapsLock"
 }
 '@
     Set-Content -LiteralPath $settingsPath -Value $settings -Encoding utf8NoBOM
@@ -287,10 +315,15 @@ function Test-CleanUninstall {
 
     Invoke-Uninstaller
 
-    Assert-PathMissing -Path $installedExecutable -Message 'The executable is removed'
-    Assert-PathMissing -Path $uninstallerPath -Message 'The uninstaller is removed'
+    # The installer's self-cleanup runs in a helper after unins000.exe exits:
+    # it deletes unins000.* and removes {app} last. Wait for it to finish.
+    Assert-PathMissing -Path $installedExecutable -Message 'The executable is removed' `
+        -WaitSeconds 15
+    Assert-PathMissing -Path $uninstallerPath -Message 'The uninstaller is removed' `
+        -WaitSeconds 15
     Assert-PathMissing -Path $startMenuShortcut -Message 'The Start Menu shortcut is removed'
-    Assert-PathMissing -Path $installDirectory -Message 'The install directory is removed'
+    Assert-PathMissing -Path $installDirectory -Message 'The install directory is removed' `
+        -WaitSeconds 15 -AllowEmptyDirectory
     Assert-PathMissing -Path $appDataDirectory -Message 'The settings directory is removed'
     Assert-Condition -Condition ($null -eq (Get-Item -LiteralPath $uninstallKeyPath -ErrorAction SilentlyContinue)) `
         -Message 'The uninstall registration is removed'
@@ -384,6 +417,27 @@ try {
 
         Set-UserState
         Test-Upgrade -FromVersion $baselineVersion -ToVersion $upgradeVersion
+
+        # The baseline path otherwise never exercises the clean-install asserts
+        # on the new setup, so check its artifacts here: the upgrade leaves the
+        # Rust payload and nothing the baseline install left behind.
+        Write-Step 'Checking the upgraded install carries only the new payload'
+        Assert-FileExists -Path $installedExecutable -Message 'The upgraded executable is installed'
+        Assert-FileExists -Path $uninstallerPath -Message 'The upgraded uninstaller is installed'
+        Assert-FileExists -Path $startMenuShortcut -Message 'The upgraded Start Menu shortcut is installed'
+        Assert-FileExists -Path (Join-Path $installDirectory 'Hyperkey.ico') `
+            -Message 'The icon resource is installed'
+
+        $expectedPayload = @('Hyperkey.App.exe', 'Hyperkey.ico')
+        $staleFiles = @(Get-ChildItem -LiteralPath $installDirectory -File |
+            Where-Object { $expectedPayload -notcontains $_.Name -and $_.Name -notlike 'unins000.*' })
+        $staleFileNames = @($staleFiles | ForEach-Object { $_.Name })
+        Assert-Condition -Condition ($staleFiles.Count -eq 0) `
+            -Message "No stale payload files survive the upgrade ($($staleFileNames -join ', '))"
+        $staleDirectories = @(Get-ChildItem -LiteralPath $installDirectory -Directory)
+        $staleDirectoryNames = @($staleDirectories | ForEach-Object { $_.Name })
+        Assert-Condition -Condition ($staleDirectories.Count -eq 0) `
+            -Message "No stale payload directories survive the upgrade ($($staleDirectoryNames -join ', '))"
 
         # The launch check runs on the upgraded files so it always exercises the
         # Rust build, never the baseline binary.

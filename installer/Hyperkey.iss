@@ -24,16 +24,25 @@ OutputBaseFilename=Hyperkey-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile=..\src\Hyperkey.App\Assets\favicon.ico
+SetupIconFile=favicon.ico
 CloseApplications=yes
 RestartApplications=no
-UninstallDisplayIcon={app}\{#AppExeName}
+; The Rust binary embeds no icon resource, so the shortcut and uninstaller
+; icons point at the .ico shipped next to it.
+UninstallDisplayIcon={app}\Hyperkey.ico
+
+; Clear the old payload before copying: the C# install left ~200 files that
+; Inno would never remove, and their presence would also keep the uninstaller
+; from removing {app} cleanly.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\*"
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "favicon.ico"; DestDir: "{app}"; DestName: "Hyperkey.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "Open Hyperkey settings"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\Hyperkey.ico"; Comment: "Open Hyperkey settings"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch Hyperkey"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

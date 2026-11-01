@@ -40,7 +40,6 @@ const KEYCAP_WIDTH: f32 = 150.0;
 const KEYCAP_HEIGHT: f32 = 120.0;
 const FIELD_WIDTH: f32 = 220.0;
 const FIELD_HEIGHT: f32 = 46.0;
-const STATUS_WIDTH: f32 = 260.0;
 const CHECKBOX_SIZE: f32 = 26.0;
 const CHECKBOX_SPACING: f32 = 12.0;
 const LABEL_SIZE: f32 = 17.0;
@@ -159,7 +158,6 @@ fn right_column(state: &State) -> Element<'_, Message> {
             Message::EnabledToggled,
             focused(state, FocusTarget::EnabledToggle),
         ),
-        Space::new().width(Fill),
         column![
             text(status_text(settings.enabled()))
                 .size(STATUS_SIZE)
@@ -185,7 +183,7 @@ fn right_column(state: &State) -> Element<'_, Message> {
             .wrapping(Wrapping::Word),
         ]
         .spacing(4.0)
-        .width(STATUS_WIDTH),
+        .width(Fill),
     ]
     .align_y(Alignment::Center);
 
@@ -293,8 +291,9 @@ fn right_column(state: &State) -> Element<'_, Message> {
         .into()
 }
 
-/// The diagnostics row: the status column on the left, the three action
-/// buttons on the right.
+/// The diagnostics section: the status text first, then the three action
+/// buttons right-aligned on their own row below it, so a narrow window clips
+/// neither.
 fn diagnostics_row(state: &State) -> Element<'_, Message> {
     let mut diagnostics = column![
         text("Diagnostics").size(CAPTION_SIZE).style(secondary_text),
@@ -338,29 +337,32 @@ fn diagnostics_row(state: &State) -> Element<'_, Message> {
             .wrapping(Wrapping::Word),
     );
 
-    row![
+    column![
         diagnostics,
         row![
-            photo_button(
-                "Restart hook",
-                Message::RestartHook,
-                focused(state, FocusTarget::RestartHook),
-            ),
-            photo_button(
-                "Emergency disable",
-                Message::EmergencyDisable,
-                focused(state, FocusTarget::EmergencyDisable),
-            ),
-            photo_button(
-                "Copy details",
-                Message::CopyDetails,
-                focused(state, FocusTarget::CopyDetails),
-            ),
-        ]
-        .spacing(8.0),
+            Space::new().width(Fill),
+            row![
+                photo_button(
+                    "Restart hook",
+                    Message::RestartHook,
+                    focused(state, FocusTarget::RestartHook),
+                ),
+                photo_button(
+                    "Emergency disable",
+                    Message::EmergencyDisable,
+                    focused(state, FocusTarget::EmergencyDisable),
+                ),
+                photo_button(
+                    "Copy details",
+                    Message::CopyDetails,
+                    focused(state, FocusTarget::CopyDetails),
+                ),
+            ]
+            .spacing(8.0),
+        ],
     ]
-    .spacing(20.0)
-    .align_y(Alignment::Start)
+    .spacing(12.0)
+    .width(Fill)
     .into()
 }
 
