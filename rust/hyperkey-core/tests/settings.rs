@@ -198,3 +198,38 @@ fn create_rejects_unsupported_trigger_and_schema() {
     )
     .is_err());
 }
+
+#[test]
+fn utf8_bom_bytes_parse() {
+    // A BOM-marked UTF-8 file is what a hand-edited save from most editors
+    // produces; the C# File.ReadAllText silently dropped the marker.
+    let json = r#"{"schemaVersion": 2, "enabled": false, "trigger": "CapsLock", "outputModifiers": ["Control"], "launchAtStartup": false, "tapBehavior": "CapsLock"}"#;
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(json.as_bytes());
+
+    let result = json::parse_bytes(&bytes);
+
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert!(!result.settings.enabled());
+}
+
+#[test]
+fn utf16_bom_bytes_parse() {
+    // Notepad's "Unicode" encoding writes UTF-16 with a BOM; the C# reader
+    // transcoded it, so the Rust store must not degrade the same file to
+    // defaults.
+    let json = r#"{"schemaVersion": 2, "enabled": false, "trigger": "CapsLock", "outputModifiers": ["Control"], "launchAtStartup": false, "tapBehavior": "CapsLock"}"#;
+
+    let mut le = vec![0xFF, 0xFE];
+    le.extend(json.encode_utf16().flat_map(u16::to_le_bytes));
+    let result = json::parse_bytes(&le);
+    assert!(!result.used_defaults);
+    assert!(!result.settings.enabled());
+
+    let mut be = vec![0xFE, 0xFF];
+    be.extend(json.encode_utf16().flat_map(u16::to_be_bytes));
+    let result = json::parse_bytes(&be);
+    assert!(!result.used_defaults);
+    assert!(!result.settings.enabled());
+}

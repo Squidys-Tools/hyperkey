@@ -6,13 +6,15 @@ use std::fmt;
 
 /// Outcome of parsing a settings document. A readable document whose values
 /// are invalid yields settings with every invalid value reset to its default,
-/// each reset reported in `repairs`. A document that cannot be read at all
+/// each reset reported in `repairs`. A document that cannot be used at all
 /// (corrupt JSON, wrong value types, an unsupported schema) yields
-/// `HyperkeySettings::defaults()` and a `fatal_error`. This mirrors the C#
-/// `SettingsParseResult` record: `used_defaults`, `repaired`, and `error` are
-/// its `UsedDefaults`, `Repaired`, and `Error` fields, `repairs` is the
-/// per-value report `Error` is joined from, and `fatal_error` isolates the
-/// unrecoverable failure for callers that only care about the fatal path.
+/// `HyperkeySettings::defaults()` and a `fatal_error`; `file_corrupt` splits
+/// that fallback between an unparseable document and a readable one. This
+/// mirrors the C# `SettingsParseResult` record: `used_defaults`, `repaired`,
+/// and `error` are its `UsedDefaults`, `Repaired`, and `Error` fields,
+/// `repairs` is the per-value report `Error` is joined from, `file_corrupt`
+/// is its `FileCorrupt` flag, and `fatal_error` isolates the unrecoverable
+/// failure for callers that only care about the fatal path.
 #[derive(Debug)]
 pub struct ParseOutcome {
     pub settings: HyperkeySettings,
@@ -25,6 +27,12 @@ pub struct ParseOutcome {
     pub repairs: Vec<String>,
     /// The unrecoverable failure, present only when `used_defaults` is true.
     pub fatal_error: Option<String>,
+    /// Splits `used_defaults` the way the C# `FileCorrupt` flag does: true
+    /// only when the document could not be parsed at all, false when it
+    /// parsed but cannot be used (for example a schema version written by a
+    /// newer Hyperkey). Callers quarantine only a corrupt file; a readable
+    /// one stays in place so its values can be recovered later.
+    pub file_corrupt: bool,
     /// The single user-facing message, equivalent to the C# `Error` field:
     /// the fatal error for a corrupt document, the joined repair report when
     /// values were reset, or `None` for a clean parse.
@@ -70,32 +78,74 @@ pub fn parse(json: &str) -> ParseOutcome {
                 repaired: !repairs.is_empty(),
                 repairs,
                 fatal_error: None,
+                file_corrupt: false,
                 error,
             }
         }
-        Err(error) => ParseOutcome {
+        Err((file_corrupt, error)) => ParseOutcome {
             settings: HyperkeySettings::defaults(),
             used_defaults: true,
             repaired: false,
             repairs: Vec::new(),
             fatal_error: Some(error.clone()),
+            file_corrupt,
             error: Some(error),
         },
     }
 }
 
-fn parse_inner(json: &str) -> Result<(HyperkeySettings, Vec<String>), String> {
+/// Decodes a settings file's raw bytes the way the C# `File.ReadAllText` did
+/// — a UTF-8 BOM is ignored, a UTF-16 LE or BE BOM (Notepad's "Unicode"
+/// output) is transcoded — then parses. Anything else is decoded as UTF-8
+/// lossily, so a stray invalid byte reaches the tolerant parser instead of
+/// failing at the read.
+pub fn parse_bytes(bytes: &[u8]) -> ParseOutcome {
+    parse(&decode_text(bytes))
+}
+
+fn decode_text(bytes: &[u8]) -> String {
+    const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+    const UTF16_LE_BOM: &[u8] = &[0xFF, 0xFE];
+    const UTF16_BE_BOM: &[u8] = &[0xFE, 0xFF];
+
+    if bytes.starts_with(UTF16_LE_BOM) {
+        let (pairs, _) = bytes[2..].as_chunks::<2>();
+        let units = pairs
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect::<Vec<u16>>();
+        return String::from_utf16_lossy(&units);
+    }
+    if bytes.starts_with(UTF16_BE_BOM) {
+        let (pairs, _) = bytes[2..].as_chunks::<2>();
+        let units = pairs
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .collect::<Vec<u16>>();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes)).into_owned()
+}
+
+fn parse_inner(json: &str) -> Result<(HyperkeySettings, Vec<String>), (bool, String)> {
+    // A document that cannot be parsed at all is corrupt; the flag flows to
+    // `ParseOutcome::file_corrupt` so callers quarantine it like C# did.
     let document: PersistedSettingsRead =
-        serde_json::from_str(json).map_err(|error| error.to_string())?;
+        serde_json::from_str(json).map_err(|error| (true, error.to_string()))?;
 
     // A missing schemaVersion marks a document written before versioning
     // existed; it is migrated by validating its fields against the current
-    // schema. Versions newer than this build still fall back to defaults.
+    // schema. A document that parsed but declares a version this build
+    // cannot read is not corrupt: the false flag keeps the file in place so
+    // a newer Hyperkey can still recover its values.
     let schema_version = document
         .schema_version
         .unwrap_or(i64::from(HyperkeySettings::CURRENT_SCHEMA_VERSION));
     if !(1..=i64::from(HyperkeySettings::CURRENT_SCHEMA_VERSION)).contains(&schema_version) {
-        return Err(format!("Unsupported settings schema: {schema_version}."));
+        return Err((
+            false,
+            format!("Unsupported settings schema: {schema_version}."),
+        ));
     }
 
     let defaults = HyperkeySettings::defaults();
@@ -136,7 +186,8 @@ fn parse_inner(json: &str) -> Result<(HyperkeySettings, Vec<String>), String> {
         launch_to_tray,
         tap_behavior,
         schema_version as i32,
-    )?;
+    )
+    .map_err(|error| (true, error))?;
 
     Ok((settings, repairs))
 }
