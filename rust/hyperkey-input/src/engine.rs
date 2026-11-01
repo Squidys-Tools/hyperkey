@@ -246,11 +246,21 @@ impl InputEngine {
             match spawned {
                 Ok(handle) => lifecycle.hook_thread = Some(handle),
                 Err(error) => {
+                    let message =
+                        format!("The keyboard hook thread could not be started. {error}");
                     set_status_locked(
                         &mut lifecycle,
                         InputEngineStatus::Failed,
-                        Some(format!("The keyboard hook thread could not be started. {error}")),
+                        Some(message.clone()),
                     );
+                    lifecycle.event_senders.retain(|sender| {
+                        sender
+                            .send(EngineEvent::StatusChanged {
+                                status: InputEngineStatus::Failed,
+                                error: Some(message.clone()),
+                            })
+                            .is_ok()
+                    });
                     return false;
                 }
             }
