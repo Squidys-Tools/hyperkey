@@ -34,7 +34,11 @@ const SHOW_SETTINGS_MESSAGE: &str = "Hyperkey.ShowSettings";
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SessionEvent {
     /// Sleep/resume, session lock/unlock, or a display change: the engine must
-    /// release generated modifiers and reset its state machine.
+    /// release generated modifiers and reset its state machine. The C# app
+    /// additionally stopped the hook while Windows was locked; the port
+    /// reconciles instead — a low-level hook cannot fire on the secure
+    /// desktop anyway, and the watchdog heals any hook Windows removed —
+    /// so no pause diagnostic exists here.
     ReconcileEngine,
     /// A second Hyperkey instance asked this one to raise its settings window.
     ShowSettings,

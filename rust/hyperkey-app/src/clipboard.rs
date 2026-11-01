@@ -18,8 +18,28 @@ pub fn set_text(text: &str) -> Result<(), String> {
     // the call; the global buffer stays alive until it is handed to the
     // clipboard (or freed on failure).
     unsafe {
-        OpenClipboard(None)
-            .map_err(|error| format!("The clipboard could not be opened: {error}"))?;
+        // Another app may hold the clipboard open briefly; retry like WPF's
+        // Clipboard.SetText, which keeps trying for about a second before
+        // reporting contention.
+        let mut error_message = String::new();
+        let mut opened = false;
+        for attempt in 0..5 {
+            match OpenClipboard(None) {
+                Ok(()) => {
+                    opened = true;
+                    break;
+                }
+                Err(error) => {
+                    error_message = error.to_string();
+                    if attempt + 1 < 5 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                }
+            }
+        }
+        if !opened {
+            return Err(format!("The clipboard could not be opened: {error_message}"));
+        }
 
         let result = fill_clipboard(text);
         let _ = CloseClipboard();

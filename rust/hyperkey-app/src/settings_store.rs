@@ -62,17 +62,35 @@ impl SettingsStore {
             };
         }
 
-        match fs::read_to_string(&self.settings_path) {
-            Ok(text) => {
-                let outcome = json::parse(&text);
+        match fs::read(&self.settings_path) {
+            Ok(bytes) => {
+                let outcome = json::parse_bytes(&bytes);
                 if outcome.used_defaults {
-                    self.quarantine(outcome.fatal_error.as_deref().unwrap_or_default())
+                    // The C# store quarantines only a corrupt document. A
+                    // readable file it cannot use — one written by a newer
+                    // Hyperkey — stays in place so its values can still be
+                    // recovered later.
+                    let reason = format!(
+                        "The settings file could not be read: {}",
+                        outcome.fatal_error.as_deref().unwrap_or_default()
+                    );
+                    if outcome.file_corrupt {
+                        self.quarantine(&reason)
+                    } else {
+                        SettingsLoadResult {
+                            settings: HyperkeySettings::defaults(),
+                            message: Some(format!(
+                                "Hyperkey loaded safe defaults. {}",
+                                Self::sentence(&reason)
+                            )),
+                        }
+                    }
                 } else {
                     SettingsLoadResult {
                         settings: outcome.settings,
                         message: if outcome.repaired {
                             Some(format!(
-                                "Some settings were repaired: {}",
+                                "Some settings were invalid and were reset to defaults ({}).",
                                 outcome.repairs.join("; ")
                             ))
                         } else {
@@ -81,25 +99,27 @@ impl SettingsStore {
                     }
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                SettingsLoadResult {
-                    settings: HyperkeySettings::defaults(),
-                    message: Some(format!(
-                        "Hyperkey could not access its settings file: {error}"
-                    )),
-                }
+            // A file that can never be read is quarantined like an
+            // unparseable one (the C# RecoverUnreadableFile path), so the
+            // warning does not repeat every launch and the next save does
+            // not silently discard it.
+            Err(error) => {
+                let reason = if error.kind() == io::ErrorKind::PermissionDenied {
+                    format!("Hyperkey could not access its settings file: {error}")
+                } else {
+                    format!("The settings file could not be read: {error}")
+                };
+                self.quarantine(&reason)
             }
-            Err(error) => SettingsLoadResult {
-                settings: HyperkeySettings::defaults(),
-                message: Some(format!("The settings file could not be read: {error}")),
-            },
         }
     }
 
     /// Moves the unreadable settings file aside to `settings.json.bak` and
-    /// reports defaults. The move is best-effort: defaults apply either way,
-    /// and the message says which outcome the user got.
-    fn quarantine(&self, fatal_error: &str) -> SettingsLoadResult {
+    /// reports defaults. `reason` is the complete problem clause. The move
+    /// is best-effort: defaults apply either way, and the message says which
+    /// outcome the user got.
+    fn quarantine(&self, reason: &str) -> SettingsLoadResult {
+        let reason = Self::sentence(reason);
         let quarantined = match self.replace_file(&self.settings_path, &self.backup_settings_path)
         {
             Ok(()) => Some("settings.json.bak"),
@@ -108,12 +128,12 @@ impl SettingsStore {
 
         let message = match quarantined {
             Some(name) => format!(
-                "Hyperkey loaded safe defaults. The settings file could not be read: \
-                 {fatal_error}. The original file was moved to {name}."
+                "Hyperkey loaded safe defaults. {reason} \
+                 The original file was moved to {name}."
             ),
             None => format!(
-                "Hyperkey loaded safe defaults. The settings file could not be read: \
-                 {fatal_error}. It could not be moved aside, so it will be replaced \
+                "Hyperkey loaded safe defaults. {reason} \
+                 It could not be moved aside, so it will be replaced \
                  the next time settings are saved."
             ),
         };
@@ -127,6 +147,18 @@ impl SettingsStore {
     fn replace_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         try_delete(to);
         fs::rename(from, to)
+    }
+
+    /// Reason clauses come from error messages that do not reliably end with
+    /// a period (serde and io errors don't), so sentences are joined on a
+    /// guaranteed one.
+    fn sentence(reason: &str) -> String {
+        let reason = reason.trim_end();
+        if reason.ends_with('.') {
+            reason.to_string()
+        } else {
+            format!("{reason}.")
+        }
     }
 
     pub fn save(&self, settings: &HyperkeySettings) -> Result<(), String> {
@@ -219,6 +251,29 @@ mod tests {
             fs::read_to_string(directory.join("settings.json.bak")).unwrap()
         );
         assert!(!store.settings_path.exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_newer_schema_loads_defaults_but_keeps_the_file() {
+        // A file written by a newer Hyperkey is readable, so it is not
+        // quarantined: it stays in place for that newer build to recover.
+        let directory = test_directory("newer-schema");
+        fs::create_dir_all(&directory).unwrap();
+        let store = SettingsStore::at(&directory);
+        fs::write(
+            &store.settings_path,
+            r#"{"schemaVersion":999,"enabled":true,"trigger":"CapsLock","outputModifiers":["Control"],"launchAtStartup":false,"launchToTray":false}"#,
+        )
+        .unwrap();
+
+        let result = store.load();
+
+        assert_eq!(HyperkeySettings::defaults(), result.settings);
+        let message = result.message.expect("a newer schema reports a message");
+        assert!(message.contains("safe defaults"), "message: {message}");
+        assert!(store.settings_path.exists());
+        assert!(!directory.join("settings.json.bak").exists());
         let _ = fs::remove_dir_all(&directory);
     }
 

@@ -17,9 +17,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
 /// positions than the US table assumes. Numpad keys, named keys, and function
 /// keys keep their fixed codes, since those do not vary by layout.
 pub fn trigger_virtual_key(key: &Key, code: Code) -> Option<u16> {
-    if !is_numpad(code)
-        && let Key::Character(text) = key
-    {
+    if is_numpad(code) {
+        // NumLock off turns the digit keys and the decimal separator into
+        // navigation keys, where a bound VK_NUMPADn can never fire; a
+        // Character logical key only appears while NumLock is on. The C#
+        // window rejected the same press as Key.End and friends.
+        return if numpad_numlock_sensitive(code) && !matches!(key, Key::Character(_)) {
+            None
+        } else {
+            virtual_key_code(code)
+        };
+    }
+
+    if let Key::Character(text) = key {
         let mut characters = text.chars();
         if let (Some(character), None) = (characters.next(), characters.next())
             && let Ok(unit) = u16::try_from(character)
@@ -34,6 +44,27 @@ pub fn trigger_virtual_key(key: &Key, code: Code) -> Option<u16> {
     }
 
     virtual_key_code(code)
+}
+
+/// Numpad codes whose emitted virtual key changes when NumLock is off: the
+/// digits become navigation keys and the decimal separator becomes Delete.
+/// Operators and Enter keep their numpad virtual keys either way.
+fn numpad_numlock_sensitive(code: Code) -> bool {
+    matches!(
+        code,
+        Code::Numpad0
+            | Code::Numpad1
+            | Code::Numpad2
+            | Code::Numpad3
+            | Code::Numpad4
+            | Code::Numpad5
+            | Code::Numpad6
+            | Code::Numpad7
+            | Code::Numpad8
+            | Code::Numpad9
+            | Code::NumpadDecimal
+            | Code::NumpadComma
+    )
 }
 
 fn is_numpad(code: Code) -> bool {
@@ -295,6 +326,25 @@ mod tests {
         ] {
             assert!(is_modifier_or_system(code), "{code:?}");
         }
+    }
+
+    #[test]
+    fn numpad_digits_need_numlock_for_their_fixed_codes() {
+        // With NumLock off the same press reports the navigation action it
+        // performs; a bound VK_NUMPADn could never fire then, so the capture
+        // rejects it exactly like the C# window rejected Key.End.
+        assert_eq!(
+            None,
+            trigger_virtual_key(&Key::Named(Named::End), Code::Numpad1)
+        );
+        assert_eq!(
+            None,
+            trigger_virtual_key(&Key::Named(Named::Delete), Code::NumpadDecimal)
+        );
+        assert_eq!(
+            Some(0x61),
+            trigger_virtual_key(&Key::Character("1".into()), Code::Numpad1)
+        );
     }
 
     #[test]

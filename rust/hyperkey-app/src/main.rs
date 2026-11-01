@@ -248,7 +248,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::CopyDetails => {
             state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
                 Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
-                Err(error) => Some(error),
+                Err(error) => Some(format!(
+                    "Diagnostic details could not be copied: {error}"
+                )),
             };
             Task::none()
         }
@@ -352,12 +354,19 @@ fn toggle_modifier(state: &mut State, modifier: OutputModifier, selected: bool) 
 fn capture_trigger_key(state: &mut State, event: &keyboard::Event) {
     let keyboard::Event::KeyPressed {
         key,
-        physical_key: Physical::Code(code),
+        physical_key,
         modifiers,
         repeat: false,
         ..
     } = event
     else {
+        return;
+    };
+
+    // Presses without a physical code (IME/vendor keys) match the C#
+    // KeyInterop failure path: the invalid-key hint, not silence.
+    let Physical::Code(code) = physical_key else {
+        state.trigger_hint = INVALID_KEY_HINT;
         return;
     };
 
@@ -461,7 +470,9 @@ fn activate_focused(state: &mut State) {
         Some(FocusTarget::CopyDetails) => {
             state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
                 Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
-                Err(error) => Some(error),
+                Err(error) => Some(format!(
+                    "Diagnostic details could not be copied: {error}"
+                )),
             };
         }
         None => {}
@@ -526,6 +537,10 @@ fn diagnostic_details(state: &State) -> String {
         format!("Output modifiers: {modifiers}"),
         format!("Input status: {:?}", state.engine.status()),
         format!("Input status error: {status_error}"),
+        format!(
+            "Last automatic hook recovery: {}",
+            state.engine.last_recovery_message().unwrap_or_else(none)
+        ),
         format!("Launch at login: {}", state.settings.launch_at_startup()),
         format!("Launch to tray: {}", state.settings.launch_to_tray()),
         format!("Diagnostic message: {diagnostic}"),
@@ -710,8 +725,8 @@ fn main() -> iced::Result {
     // Only one Hyperkey may own the keyboard hook at a time; the name is
     // shared with the C# build so the two cannot run side by side either.
     let _single_instance = match single_instance::acquire() {
-        Some(guard) => guard,
-        None => {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
             // Ask the running instance to surface its settings window; fall
             // back to a visible message when the broadcast cannot be posted.
             if !single_instance::notify_existing() {
@@ -720,6 +735,13 @@ fn main() -> iced::Result {
                     "Hyperkey",
                 );
             }
+            return Ok(());
+        }
+        Err(error) => {
+            session_window::message_box(
+                &format!("Hyperkey could not start: {error}"),
+                "Hyperkey",
+            );
             return Ok(());
         }
     };
