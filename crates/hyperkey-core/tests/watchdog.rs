@@ -1,4 +1,4 @@
-//! Port of tests/Hyperkey.Core.Tests/HookWatchdogTests.cs.
+//! Ported from the C# hook-watchdog tests.
 
 use hyperkey_core::watchdog::{HookWatchdog, HookWatchdogAction};
 

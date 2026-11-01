@@ -366,6 +366,9 @@ if (-not $baseVersionMatch.Success) {
     throw "The [workspace.package] version was not found in: $workspaceManifestPath"
 }
 $baseVersion = $baseVersionMatch.Groups[1].Value.Trim()
+if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must use three numeric components, for example 0.1.0. Received: $baseVersion"
+}
 $versionParts = $baseVersion.Split('.')
 $upgradeVersion = "$($versionParts[0]).$($versionParts[1]).$([int]$versionParts[2] + 1)"
 

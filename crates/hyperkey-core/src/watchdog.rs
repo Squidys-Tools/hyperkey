@@ -2,7 +2,7 @@
 //! No Win32: the caller supplies millisecond ticks (the engine uses
 //! `GetTickCount64`, the tests supply constants).
 //!
-//! Port of `src/Hyperkey.Input/HookWatchdog.cs`. The hook callback stamps a
+//! Ported from the C# hook watchdog, removed with the C# app. The hook callback stamps a
 //! heartbeat on every event it sees; a timer-driven probe (a tagged SendInput
 //! key-up) keeps beats arriving while the system is otherwise quiet. Windows
 //! silently removes low-level hooks that stall, so a heartbeat older than the

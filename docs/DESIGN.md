@@ -216,7 +216,7 @@ Settings writes should be atomic enough that a process termination cannot leave 
 The settings window should:
 
 - Open from the tray icon.
-- Open at 940x640 centered on screen, resizable down to 820x540. Window geometry is not persisted; there are no size or position fields in the settings model.
+- Open at 760x540 centered on screen, resizable down to 720x500. Window geometry is not persisted; there are no size or position fields in the settings model.
 - Follow the system light and dark mode.
 - Keep a clear enabled or disabled state at the top.
 - Offer compact controls for the trigger key and output modifier combination.
@@ -278,7 +278,7 @@ Exit condition met: failures are visible, recoverable, and do not require killin
 
 - Build a conventional Windows installer with a simple one-line installation path. Verified by `scripts/verify-installer.ps1`.
 - Configure per-user startup registration. Implemented in the native shell; the installer writes the Start Menu entry and the uninstaller removes the `Run` value.
-- Apply the application icon to the setup, the installed executable, the settings window, and the tray. Done. The icon stops at 48 px, so adding 64 px and 256 px frames is future artwork, not future wiring.
+- Apply the application icon to the setup, the installed shortcut and uninstaller, the settings window, and the tray. Done — `installer/favicon.ico` is the setup wizard icon and ships as `Hyperkey.ico` for the shortcut and uninstaller; the app binary embeds no icon, so the settings window and tray draw theirs at runtime. The icon stops at 48 px, so adding 64 px and 256 px frames is future artwork, not future wiring.
 - Test clean install, upgrade, uninstall, and startup behavior. Automated in CI by `scripts/verify-installer.ps1`.
 - Keep the elevation limitation and uninstall data-cleanup behavior documented.
 
@@ -342,7 +342,7 @@ reasoning is not lost:
 1. **Output modifiers use the left-hand keys only.** The synthesizer emits fixed left-side scan codes and no virtual keys, so the physical side of the user's own Ctrl/Alt/Shift is not preserved. Revisit only if an application needs the distinction.
 2. **A conventional Windows installer, not Scoop.** The Inno Setup definition ships; no Scoop manifest exists. A manifest remains a reasonable later addition.
 3. **Elevated applications are unsupported and documented.** The app runs `asInvoker`, so `SendInput` cannot reach a higher-integrity window. Stated in the README, the changelog, and in-app.
-4. **The icon ships as a placeholder.** `favicon.ico` is applied to the setup executable, the installed executable, the settings window, and the tray. It stops at 48 px; larger frames are artwork, not wiring.
+4. **The icon ships as a placeholder.** `installer/favicon.ico` is the setup wizard icon and ships in the install for the shortcut and uninstaller icons; the app binary embeds no icon, so the settings window and tray draw their own. It stops at 48 px; larger frames are artwork, not wiring.
 
 ## Research references
 

@@ -1,4 +1,4 @@
-//! Port of tests/Hyperkey.Core.Tests/Program.cs — one Rust test per C# case.
+//! Ported from the C# program tests — one Rust test per C# case.
 
 use hyperkey_core::json;
 use hyperkey_core::keys::{KeyTransition, KeyboardEvent, TriggerKey, VirtualKey};
