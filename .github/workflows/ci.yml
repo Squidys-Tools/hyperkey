@@ -54,3 +54,34 @@ jobs:
       - name: Verify installer
         shell: pwsh
         run: ./scripts/verify-installer.ps1
+
+  rust:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component clippy
+          rustup default stable-x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+
+      - name: Lint workspace
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run core tests
+        working-directory: rust
+        run: cargo test --workspace
+
+      - name: Build app
+        working-directory: rust
+        run: cargo build -p hyperkey-app --release
