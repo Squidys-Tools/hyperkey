@@ -104,12 +104,24 @@ impl ModifierSynthesizer {
         };
 
         let inputs = [create_input(scan_code, false), create_input(scan_code, true)];
-        if send(&inputs) == inputs.len() as u32 {
+        let sent = send(&inputs);
+        if sent == inputs.len() as u32 {
             return Ok(());
         }
 
+        // A partial send can leave the replay's key-down injected with no
+        // release; push the events SendInput skipped so the trigger does
+        // not stay held. The anomaly is still reported either way, with the
+        // recovery's outcome noted.
+        let skipped = &inputs[usize::min(sent as usize, inputs.len())..];
+        let recovered = sent > 0 && send(skipped) == skipped.len() as u32;
         Err(format!(
-            "Windows rejected the trigger-key tap replay. {}",
+            "Windows rejected the trigger-key tap replay{}. {}",
+            if recovered {
+                "; the skipped release was injected afterward"
+            } else {
+                ""
+            },
             windows::core::Error::from_thread()
         ))
     }

@@ -316,7 +316,7 @@ fn diagnostics_row(state: &State) -> Element<'_, Message> {
         .or(state.diagnostic_message.as_ref());
     if let Some(message) = diagnostic {
         diagnostics =
-            diagnostics.push(text(message.clone()).size(CAPTION_SIZE).style(secondary_text));
+            diagnostics.push(text(message.as_str()).size(CAPTION_SIZE).style(secondary_text));
     }
     if let Some(error) = state.engine.status_error() {
         diagnostics = diagnostics.push(text(error).size(CAPTION_SIZE).style(danger_text));
@@ -326,7 +326,8 @@ fn diagnostics_row(state: &State) -> Element<'_, Message> {
             diagnostics.push(text(message).size(CAPTION_SIZE).style(secondary_text));
     }
     if let Some(status) = &state.copy_status {
-        diagnostics = diagnostics.push(text(status.clone()).size(CAPTION_SIZE).style(secondary_text));
+        diagnostics =
+            diagnostics.push(text(status.as_str()).size(CAPTION_SIZE).style(secondary_text));
     }
     diagnostics = diagnostics.push(
         text("Elevated applications are unsupported in this MVP. \

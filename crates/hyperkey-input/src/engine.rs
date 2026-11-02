@@ -230,14 +230,7 @@ impl InputEngine {
             set_status_locked(&mut lifecycle, InputEngineStatus::Starting, None);
             // Publish while still holding the lock and before the hook thread
             // exists, so subscribers can never see Running before Starting.
-            lifecycle.event_senders.retain(|sender| {
-                sender
-                    .send(EngineEvent::StatusChanged {
-                        status: InputEngineStatus::Starting,
-                        error: None,
-                    })
-                    .is_ok()
-            });
+            publish_status_locked(&mut lifecycle, InputEngineStatus::Starting, None);
 
             let inner = Arc::clone(&self.inner);
             let spawned = std::thread::Builder::new()
@@ -253,14 +246,7 @@ impl InputEngine {
                         InputEngineStatus::Failed,
                         Some(message.clone()),
                     );
-                    lifecycle.event_senders.retain(|sender| {
-                        sender
-                            .send(EngineEvent::StatusChanged {
-                                status: InputEngineStatus::Failed,
-                                error: Some(message.clone()),
-                            })
-                            .is_ok()
-                    });
+                    publish_status_locked(&mut lifecycle, InputEngineStatus::Failed, Some(message));
                     return false;
                 }
             }
@@ -919,9 +905,23 @@ fn set_status_locked(
 /// `mpsc::Sender::send` never blocks, so this is safe under `lifecycle`.
 fn publish(engine: &Arc<EngineInner>, event: EngineEvent) {
     let mut lifecycle = lock(&engine.lifecycle);
+    publish_locked(&mut lifecycle, event);
+}
+
+/// Same as `publish`, for a caller already holding `lifecycle` — used where
+/// the event must be sequenced under the lock that changed the status.
+fn publish_locked(lifecycle: &mut Lifecycle, event: EngineEvent) {
     lifecycle
         .event_senders
         .retain(|sender| sender.send(event.clone()).is_ok());
+}
+
+fn publish_status_locked(
+    lifecycle: &mut Lifecycle,
+    status: InputEngineStatus,
+    error: Option<String>,
+) {
+    publish_locked(lifecycle, EngineEvent::StatusChanged { status, error });
 }
 
 fn publish_status(engine: &Arc<EngineInner>, status: InputEngineStatus, error: Option<String>) {
