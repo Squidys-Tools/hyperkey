@@ -654,13 +654,21 @@ fn reinstall_hook(
                 }
             });
             watchdog.reset(tick_count());
-            record_recovery(
-                inner,
-                format!(
-                    "The keyboard hook was reinstalled automatically at {} after it stopped responding.",
-                    local_time_stamp()
-                ),
-            );
+            // Only a watchdog-detected dead hook is an automatic recovery:
+            // a forced request from `restart_hook` is user-initiated, so it
+            // must not masquerade as "reinstalled automatically after it
+            // stopped responding" in `last_recovery_message` or fire the
+            // `HookRecovered` event. The C# engine likewise only recorded a
+            // recovery on its watchdog path.
+            if !forced {
+                record_recovery(
+                    inner,
+                    format!(
+                        "The keyboard hook was reinstalled automatically at {} after it stopped responding.",
+                        local_time_stamp()
+                    ),
+                );
+            }
             true
         }
     }
@@ -1008,6 +1016,41 @@ mod tests {
             TriggerMachineState::IDLE,
             lock(&engine.inner.shared).machine
         );
+    }
+
+    #[test]
+    fn configure_resets_the_machine_and_swaps_the_input_configuration() {
+        // Reconfiguring mid-hold must drop the in-flight phase and release
+        // the generated layer before the new trigger takes effect — the same
+        // release-then-swap order the C# engine used.
+        let engine = engine();
+        lock(&engine.inner.shared).machine = TriggerMachineState {
+            phase: machine::TriggerPhase::HyperActive,
+        };
+
+        engine.configure(TriggerKey::SCROLL_LOCK, vec![OutputModifier::Alt]);
+
+        let shared = lock(&engine.inner.shared);
+        assert_eq!(TriggerMachineState::IDLE, shared.machine);
+        assert_eq!(TriggerKey::SCROLL_LOCK, shared.trigger);
+        assert_eq!(&[OutputModifier::Alt], shared.output_modifiers.as_slice());
+    }
+
+    #[test]
+    fn queued_reinstall_requests_are_deduped_while_the_hook_is_alive() {
+        // A non-forced reinstall must re-check the watchdog first: a
+        // heartbeat that arrived after the request was queued proves the
+        // hook is alive, so the leftover request returns without touching
+        // the hook — and without recording a recovery that never happened.
+        let engine = engine();
+        let watchdog = Arc::new(HookWatchdog::new(60_000, tick_count()));
+        *lock(&engine.inner.watchdog) = Some(Arc::clone(&watchdog));
+        let mut current_hook = None;
+
+        assert!(reinstall_hook(&engine.inner, &mut current_hook, false));
+
+        assert!(current_hook.is_none());
+        assert!(engine.last_recovery_message().is_none());
     }
 
     #[test]
