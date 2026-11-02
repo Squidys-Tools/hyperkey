@@ -17,7 +17,7 @@ Your real Ctrl, Alt, and Shift keys keep working exactly as before. Hyperkey add
 
 1. Download the `Hyperkey-Setup-*.exe` installer from the [releases page](https://github.com/Squidys-Tools/hyperkey/releases).
 2. Run it. The installer is per-user and needs no administrator access.
-3. Hyperkey starts in the system tray. Click the tray icon to open settings.
+3. Hyperkey starts in the system tray. Double-click the tray icon to open settings, or right-click it and choose **Open settings**.
 
 The installer isn't code-signed yet, so Windows may show a SmartScreen warning on first run. Choose "More info" and "Run anyway" to continue.
 
