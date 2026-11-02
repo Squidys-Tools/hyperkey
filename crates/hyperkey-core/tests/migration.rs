@@ -216,3 +216,51 @@ fn corrupt_json_falls_back_to_defaults() {
         "Expected a parse error to be reported."
     );
 }
+
+#[test]
+fn empty_document_repairs_every_required_field() {
+    // "{}" is a readable document, not a corrupt one: each required value
+    // resets to its default and is reported, and optional values take
+    // their defaults silently.
+    let result = json::parse("{}");
+
+    assert!(!result.used_defaults);
+    assert!(!result.file_corrupt);
+    assert!(result.repaired);
+    assert_eq!(HyperkeySettings::defaults(), result.settings);
+    for expected in ["enabled", "launchAtStartup", "trigger", "output modifiers"] {
+        assert!(
+            result.repairs.iter().any(|repair| repair.contains(expected)),
+            "Expected a repair mentioning {expected}."
+        );
+    }
+}
+
+#[test]
+fn null_schema_version_migrates_like_a_missing_one() {
+    // An explicit null version is the same "unversioned document" the
+    // missing key produces: the C# int? was null either way.
+    let result = json::parse(
+        r#"{
+          "schemaVersion": null,
+          "enabled": false,
+          "trigger": "F9",
+          "outputModifiers": ["Alt"],
+          "launchAtStartup": false,
+          "launchToTray": true,
+          "tapBehavior": "CapsLock"
+        }"#,
+    );
+
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert_eq!(
+        HyperkeySettings::CURRENT_SCHEMA_VERSION,
+        result.settings.schema_version()
+    );
+    assert!(!result.settings.enabled());
+    assert_eq!(
+        TriggerKey::try_parse("F9").expect("Expected F9 to parse."),
+        result.settings.trigger()
+    );
+}

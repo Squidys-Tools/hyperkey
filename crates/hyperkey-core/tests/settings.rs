@@ -233,3 +233,178 @@ fn utf16_bom_bytes_parse() {
     assert!(!result.used_defaults);
     assert!(!result.settings.enabled());
 }
+
+#[test]
+fn utf32_bom_bytes_parse() {
+    // The C# File.ReadAllText recognized UTF-32 BOMs too; without that the
+    // same file would look like UTF-16 garbage and be quarantined as
+    // corrupt. The LE marker shares UTF-16 LE's first two bytes, so this
+    // also proves the decode order.
+    let json = r#"{"schemaVersion": 2, "enabled": false, "trigger": "CapsLock", "outputModifiers": ["Control"], "launchAtStartup": false, "tapBehavior": "CapsLock"}"#;
+
+    let mut le = vec![0xFF, 0xFE, 0x00, 0x00];
+    le.extend(json.chars().flat_map(|c| (c as u32).to_le_bytes()));
+    let result = json::parse_bytes(&le);
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert!(!result.settings.enabled());
+
+    let mut be = vec![0x00, 0x00, 0xFE, 0xFF];
+    be.extend(json.chars().flat_map(|c| (c as u32).to_be_bytes()));
+    let result = json::parse_bytes(&be);
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert!(!result.settings.enabled());
+}
+
+#[test]
+fn wrong_typed_fields_fail_the_whole_read() {
+    // Tolerant repair is per value, but only for values that are absent or
+    // semantically invalid. A field holding the wrong JSON type takes the
+    // C# JsonException path: the document is corrupt, not repairable.
+    for document in [
+        r#"{"schemaVersion": 2, "enabled": "yes"}"#,
+        r#"{"schemaVersion": 2, "enabled": 1}"#,
+        r#"{"schemaVersion": 2, "trigger": 5}"#,
+        r#"{"schemaVersion": 2, "outputModifiers": "Control"}"#,
+        r#"{"schemaVersion": 2, "outputModifiers": ["Control", 5]}"#,
+        r#"{"schemaVersion": 2, "launchAtStartup": "true"}"#,
+        r#"{"schemaVersion": 2, "launchToTray": []}"#,
+        r#"{"schemaVersion": 2, "tapBehavior": 0}"#,
+        r#"{"schemaVersion": "two"}"#,
+        r#"{"schemaVersion": 2.5}"#,
+    ] {
+        let result = json::parse(document);
+        assert!(result.used_defaults, "expected defaults for {document}");
+        assert!(result.file_corrupt, "expected corrupt flag for {document}");
+        assert!(result.fatal_error.is_some());
+    }
+}
+
+#[test]
+fn null_fields_read_as_missing_not_wrong_typed() {
+    // The nullable C# fields and the serde Option<T> equivalents treat JSON
+    // null as absent: required values are repaired per field, optional
+    // values take their defaults silently — never a corrupt document.
+    let result = json::parse(
+        r#"{
+          "schemaVersion": 2,
+          "enabled": null,
+          "trigger": null,
+          "outputModifiers": null,
+          "launchAtStartup": null,
+          "launchToTray": null,
+          "tapBehavior": null
+        }"#,
+    );
+
+    assert!(!result.used_defaults);
+    assert!(!result.file_corrupt);
+    assert!(result.repaired);
+    let defaults = HyperkeySettings::defaults();
+    assert_eq!(defaults.enabled(), result.settings.enabled());
+    assert_eq!(defaults.trigger(), result.settings.trigger());
+    assert_eq!(
+        defaults.output_modifiers(),
+        result.settings.output_modifiers()
+    );
+    assert!(!result.settings.launch_to_tray());
+}
+
+#[test]
+fn null_modifier_entries_are_dropped_not_fatal() {
+    // A null element inside outputModifiers is one bad value, not a corrupt
+    // document: the C# string?[] field dropped it individually like any
+    // other invalid entry.
+    const TEMPLATE: &str = r#"{
+      "schemaVersion": 2,
+      "enabled": true,
+      "trigger": "CapsLock",
+      "outputModifiers": MODIFIERS,
+      "launchAtStartup": true,
+      "tapBehavior": "CapsLock"
+    }"#;
+
+    let result = json::parse(&TEMPLATE.replace(
+        "MODIFIERS",
+        r#"["Control", null, "Alt", null]"#,
+    ));
+    assert!(!result.used_defaults);
+    assert!(!result.file_corrupt);
+    assert!(result.repaired);
+    assert_eq!(
+        &[OutputModifier::Control, OutputModifier::Alt],
+        result.settings.output_modifiers()
+    );
+
+    // An all-null list degrades to the full reset — still a repair, still
+    // not a corrupt file.
+    let null_only = json::parse(&TEMPLATE.replace("MODIFIERS", "[null, null]"));
+    assert!(!null_only.used_defaults);
+    assert!(!null_only.file_corrupt);
+    assert!(null_only.repaired);
+    assert_eq!(
+        HyperkeySettings::defaults().output_modifiers(),
+        null_only.settings.output_modifiers()
+    );
+}
+
+#[test]
+fn property_names_parse_case_insensitively() {
+    // The C# PropertyNameCaseInsensitive option: key casing is irrelevant.
+    let result = json::parse(
+        r#"{
+          "SCHEMAVERSION": 2,
+          "ENABLED": false,
+          "Trigger": "ScrollLock",
+          "OUTPUTMODIFIERS": ["Control"],
+          "LaunchAtStartup": false,
+          "LAUNCHTOTRAY": true,
+          "tapbehavior": "capslock"
+        }"#,
+    );
+
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert!(!result.settings.enabled());
+    assert_eq!(TriggerKey::SCROLL_LOCK, result.settings.trigger());
+    assert!(result.settings.launch_to_tray());
+}
+
+#[test]
+fn unknown_fields_are_ignored() {
+    // Forward compatibility: a document written by a newer build keeps the
+    // fields this build understands and ignores the rest.
+    let result = json::parse(
+        r#"{
+          "schemaVersion": 2,
+          "enabled": false,
+          "trigger": "F9",
+          "outputModifiers": ["Shift"],
+          "launchAtStartup": false,
+          "launchToTray": true,
+          "tapBehavior": "CapsLock",
+          "futureFeatureFlag": true,
+          "futureObject": { "nested": [1, 2, 3] }
+        }"#,
+    );
+
+    assert!(!result.used_defaults);
+    assert!(!result.repaired);
+    assert!(!result.settings.enabled());
+    assert_eq!(&[OutputModifier::Shift], result.settings.output_modifiers());
+    assert!(result.settings.launch_to_tray());
+    assert_eq!(TriggerKey::try_parse("F9").unwrap(), result.settings.trigger());
+}
+
+#[test]
+fn unsupported_schema_is_not_marked_corrupt() {
+    // A readable document from a newer Hyperkey reports used_defaults but is
+    // not corrupt: the store must keep the file in place so its values can
+    // be recovered by a build that understands them.
+    let result = json::parse(r#"{"schemaVersion": 99, "enabled": false}"#);
+
+    assert!(result.used_defaults);
+    assert!(!result.file_corrupt);
+    assert!(result.fatal_error.is_some());
+}
