@@ -11,6 +11,8 @@ This document tracks the implementation phases and current project status.
 
 ## Implementation Phases
 
+Phases 1-3 are recorded as the original plan — their C# and WPF specifics are superseded by the Rust implementation described in `DESIGN.md`.
+
 ### Phase 1: Native Shell ✅ Complete
 
 - [x] WPF desktop project with WPF UI theme resources

@@ -376,6 +376,7 @@ $hadExistingAppData = Test-Path -LiteralPath $appDataDirectory
 $hadExistingShortcut = Test-Path -LiteralPath $startMenuShortcut
 $savedStartupRegistration = Get-StartupRegistration
 $startedVerification = $false
+$verificationPassed = $false
 
 New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
 
@@ -458,9 +459,10 @@ try {
     Test-CleanUninstall
 
     Write-Host "`nInstaller verification passed." -ForegroundColor Green
+    $verificationPassed = $true
 }
 finally {
-    $verificationFailed = $true
+    $cleanupFailed = $true
 
     Get-Process -Name 'Hyperkey.App' -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
@@ -501,7 +503,7 @@ finally {
                 Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value $savedStartupRegistration
             }
 
-            $verificationFailed = $false
+            $cleanupFailed = $false
         }
         catch {
             Write-Host "    warn  cleanup could not fully restore this machine: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -509,8 +511,11 @@ finally {
         }
     }
 
-    if ($verificationFailed) {
-        # Keep the Inno logs and the settings backup for diagnosis and recovery.
+    if ($cleanupFailed -or -not $verificationPassed) {
+        # Keep the Inno logs and the settings backup whenever the run did not
+        # pass or the cleanup could not restore this machine: they are the
+        # diagnosis and recovery material. A clean pass leaves nothing worth
+        # keeping.
         Write-Host "    logs and settings backup kept at $workDirectory" -ForegroundColor Yellow
     }
     else {

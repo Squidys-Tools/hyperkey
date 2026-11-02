@@ -18,7 +18,7 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component clippy
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
           rustup default stable-x86_64-pc-windows-msvc
 
       - name: Cache Rust build artifacts
