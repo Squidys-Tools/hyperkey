@@ -168,11 +168,7 @@ fn boot(start_to_tray: bool) -> (State, Task<Message>) {
 fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ToggleEnabled => {
-            update_settings(
-                state,
-                state.settings.with_enabled(!state.settings.enabled()),
-                true,
-            );
+            toggle_enabled(state);
             Task::none()
         }
         Message::EnabledToggled(enabled) => {
@@ -239,17 +235,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::EmergencyDisable => {
-            state.engine.emergency_disable();
-            update_settings(state, state.settings.with_enabled(false), false);
+            emergency_disable(state);
             Task::none()
         }
         Message::CopyDetails => {
-            state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
-                Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
-                Err(error) => Some(format!(
-                    "Diagnostic details could not be copied: {error}"
-                )),
-            };
+            copy_details(state);
             Task::none()
         }
         Message::SessionEvent(SessionEvent::ReconcileEngine) => {
@@ -422,13 +412,7 @@ fn navigate_focus(state: &mut State, event: &keyboard::Event) {
 
 fn activate_focused(state: &mut State) {
     match state.focus {
-        Some(FocusTarget::EnabledToggle) => {
-            update_settings(
-                state,
-                state.settings.with_enabled(!state.settings.enabled()),
-                true,
-            );
-        }
+        Some(FocusTarget::EnabledToggle) => toggle_enabled(state),
         Some(FocusTarget::RebindTrigger) => {
             state.capturing_trigger = true;
             state.trigger_hint = CAPTURE_TRIGGER_HINT;
@@ -461,24 +445,39 @@ fn activate_focused(state: &mut State) {
             );
         }
         Some(FocusTarget::RestartHook) => restart_hook(state),
-        Some(FocusTarget::EmergencyDisable) => {
-            state.engine.emergency_disable();
-            update_settings(state, state.settings.with_enabled(false), false);
-        }
-        Some(FocusTarget::CopyDetails) => {
-            state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
-                Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
-                Err(error) => Some(format!(
-                    "Diagnostic details could not be copied: {error}"
-                )),
-            };
-        }
+        Some(FocusTarget::EmergencyDisable) => emergency_disable(state),
+        Some(FocusTarget::CopyDetails) => copy_details(state),
         None => {}
     }
 }
 
 fn has_modifier(state: &State, modifier: OutputModifier) -> bool {
     state.settings.output_modifiers().contains(&modifier)
+}
+
+fn toggle_enabled(state: &mut State) {
+    update_settings(
+        state,
+        state.settings.with_enabled(!state.settings.enabled()),
+        true,
+    );
+}
+
+/// Emergency disable releases the modifier layer and stops the engine, but
+/// deliberately does not persist `enabled = false`: the next launch
+/// reactivates unless the user toggles the setting off.
+fn emergency_disable(state: &mut State) {
+    state.engine.emergency_disable();
+    update_settings(state, state.settings.with_enabled(false), false);
+}
+
+fn copy_details(state: &mut State) {
+    state.copy_status = match clipboard::set_text(&diagnostic_details(state)) {
+        Ok(()) => Some("Diagnostic details copied to the clipboard.".to_string()),
+        Err(error) => Some(format!(
+            "Diagnostic details could not be copied: {error}"
+        )),
+    };
 }
 
 /// Mirrors the C# RestartInputEngine: refuse while disabled, prefer the
