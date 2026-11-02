@@ -1,7 +1,7 @@
-//! Port of tests/Hyperkey.Core.Tests/SettingsMigrationTests.cs — the
-//! parse-level cases. The C# file also covers `SettingsStore` behavior (the
-//! corrupt-file `.bak` move, temp-file cleanup, store-level messages); the
-//! store lives in the app crate, so those cases are not ported here.
+//! Ported from the C# settings-migration tests — the parse-level cases. The
+//! C# suite also covered `SettingsStore` behavior (the corrupt-file `.bak`
+//! move, temp-file cleanup, store-level messages); the store lives in the app
+//! crate, so those cases are not ported here.
 
 use hyperkey_core::json;
 use hyperkey_core::keys::TriggerKey;

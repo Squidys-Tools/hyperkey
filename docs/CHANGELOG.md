@@ -4,7 +4,7 @@ This document tracks the implementation phases and current project status.
 
 ## Current Status
 
-**Version:** 0.1.1
+**Version:** 0.1.2
 **Phase:** 4 - Packaging and Polish (Complete)
 
 ---
@@ -60,7 +60,7 @@ This document tracks the implementation phases and current project status.
 - [x] Rebindable trigger key (any normal keyboard key; settings schema v2)
 - [x] Installer validation and testing (`scripts/verify-installer.ps1`, run in CI)
 - [x] Clean install, upgrade, uninstall, and startup testing (same check)
-- [x] Application icon on the setup, installed executable, settings window, and tray
+- [x] Application icon on the setup, Start Menu shortcut and uninstaller, settings window, and tray (the executable itself embeds no icon)
 
 **Exit condition met:** A new Windows user can install, enable, test, and remove the app without opening a terminal.
 
@@ -73,11 +73,10 @@ pull request.
 free utility, so Windows may show a SmartScreen warning on first run. The README explains how to
 proceed. This is a decision, not an open item.
 
-**Icons are a placeholder, not final artwork.** `Assets/favicon.ico` (48/32/16 px, 32-bit colour) is
-applied to the setup executable, the installed executable, the settings window, and the tray. It is
-already wired everywhere; what is missing is larger frames, which is artwork rather than code. The
-tray icon is also delivered as a single 32 px raster derived from the executable rather than picking
-a frame by DPI.
+**Icons are a placeholder, not final artwork.** `installer/favicon.ico` (48/32/16 px, 32-bit colour) is
+the setup wizard icon and ships in the install for the shortcut and uninstaller icons; the app binary
+embeds no icon, so the settings window and tray draw their own. It is
+already wired everywhere; what is missing is larger frames, which is artwork rather than code.
 
 ---
 
@@ -108,6 +107,7 @@ a frame by DPI.
 
 | Version | Date | Phase | Notes |
 |---------|------|-------|-------|
+| 0.1.2 | - | 4 | Settings window rewritten in Rust (iced) with a dark theme; the installer ships the Rust app and upgrades an existing C# install in place |
 | Unreleased | - | 4 | Rebindable trigger key, main window redesign with theme tokens, press-to-rebind button, key-up synthesis for released modifiers, automated installer verification, resilient settings loading (unversioned-file migration, per-value validation, corrupt-file backup to settings.json.bak) |
 | 0.1.1 | - | 4 | Lazy-load settings window for lower tray-idle memory usage |
 | 0.1.0 | - | 4 | Initial MVP, phases 1-3 complete |

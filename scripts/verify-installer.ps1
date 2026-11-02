@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $packageScriptPath = Join-Path $repositoryRoot 'scripts\package-installer.ps1'
-$versionPropsPath = Join-Path $repositoryRoot 'Directory.Build.props'
+$workspaceManifestPath = Join-Path $repositoryRoot 'Cargo.toml'
 $installerDirectory = Join-Path $repositoryRoot 'publish\installer'
 
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\Hyperkey'
@@ -356,8 +356,19 @@ if ($runningInstances.Count -gt 0) {
     throw "Hyperkey is running. Quit it from the tray and run this script again; the single-instance check needs a clean session."
 }
 
-[xml]$versionDocument = Get-Content -LiteralPath $versionPropsPath -Raw
-$baseVersion = $versionDocument.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText.Trim()
+$workspacePackage = [regex]::Match(
+    (Get-Content -LiteralPath $workspaceManifestPath -Raw),
+    '(?ms)^\[workspace\.package\]\s*(.*?)(?=^\[|\z)')
+$baseVersionMatch = [regex]::Match(
+    $workspacePackage.Groups[1].Value,
+    'version\s*=\s*"([^"]+)"')
+if (-not $baseVersionMatch.Success) {
+    throw "The [workspace.package] version was not found in: $workspaceManifestPath"
+}
+$baseVersion = $baseVersionMatch.Groups[1].Value.Trim()
+if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must use three numeric components, for example 0.1.0. Received: $baseVersion"
+}
 $versionParts = $baseVersion.Split('.')
 $upgradeVersion = "$($versionParts[0]).$($versionParts[1]).$([int]$versionParts[2] + 1)"
 

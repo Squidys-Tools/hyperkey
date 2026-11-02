@@ -1,4 +1,4 @@
-//! Port of the settings cases added in tests/Hyperkey.Core.Tests/SettingsTests.cs.
+//! Ported from the C# settings test cases.
 //! Two cases assert the tolerant-parse semantics the C# PR for settings
 //! migration defines: missing required booleans and invalid modifier sets are
 //! repaired per value, not treated as fatal, so their expected outcomes are
