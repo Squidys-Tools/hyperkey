@@ -42,7 +42,7 @@ pub fn run_command(executable: &Path) -> String {
 fn set_value(command: &str) -> Result<(), String> {
     let subkey = wide(RUN_KEY_PATH);
     let value = wide(VALUE_NAME);
-    let mut command_wide: Vec<u16> = command.encode_utf16().chain(once(0)).collect();
+    let command_wide: Vec<u16> = command.encode_utf16().chain(once(0)).collect();
     // RegSetKeyValueW reads the buffer only for the call duration.
     let bytes = (command_wide.len() * size_of::<u16>()) as u32;
 
@@ -52,7 +52,7 @@ fn set_value(command: &str) -> Result<(), String> {
             PCWSTR(subkey.as_ptr()),
             PCWSTR(value.as_ptr()),
             REG_SZ.0,
-            Some(command_wide.as_mut_ptr().cast()),
+            Some(command_wide.as_ptr().cast()),
             bytes,
         )
     }

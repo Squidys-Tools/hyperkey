@@ -196,6 +196,7 @@ fn try_delete(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyperkey_core::keys::TriggerKey;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn test_directory(name: &str) -> PathBuf {
@@ -348,6 +349,4 @@ mod tests {
         assert!(result.message.is_none());
         let _ = fs::remove_dir_all(&directory);
     }
-
-    use hyperkey_core::keys::TriggerKey;
 }
