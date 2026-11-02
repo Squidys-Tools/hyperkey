@@ -529,7 +529,7 @@ fn diagnostic_details(state: &State) -> String {
 
     [
         format!("Hyperkey version: {}", env!("CARGO_PKG_VERSION")),
-        format!("Enabled: {}", state.settings.enabled()),
+        format!("Enabled: {}", bool_label(state.settings.enabled())),
         format!("Trigger: {}", state.settings.trigger().display_label()),
         format!("Output modifiers: {modifiers}"),
         format!("Input status: {:?}", state.engine.status()),
@@ -538,12 +538,18 @@ fn diagnostic_details(state: &State) -> String {
             "Last automatic hook recovery: {}",
             state.engine.last_recovery_message().unwrap_or_else(none)
         ),
-        format!("Launch at login: {}", state.settings.launch_at_startup()),
-        format!("Launch to tray: {}", state.settings.launch_to_tray()),
+        format!("Launch at login: {}", bool_label(state.settings.launch_at_startup())),
+        format!("Launch to tray: {}", bool_label(state.settings.launch_to_tray())),
         format!("Diagnostic message: {diagnostic}"),
         format!("Recovery message: {recovery}"),
     ]
     .join("\r\n")
+}
+
+/// .NET renders `bool` as `True`/`False`; the diagnostic block keeps that
+/// casing so it stays byte-identical to the C# output.
+fn bool_label(value: bool) -> &'static str {
+    if value { "True" } else { "False" }
 }
 
 fn modifier_name(modifier: &OutputModifier) -> &'static str {
@@ -970,8 +976,9 @@ mod tests {
 
     #[test]
     fn a_printable_key_rebinds_the_trigger_and_persists() {
-        // The KeyInterop/VkKeyScan path: a normal key captures to the
-        // corresponding virtual key and is saved.
+        // A normal key captures to its virtual key and is saved. A named key
+        // is used rather than a Character: VkKeyScanW resolves characters
+        // through the active layout, so 'j' would not be VK_J on e.g. Dvorak.
         let directory = test_directory("rebind");
         let mut state = state_in(&directory);
         state.capturing_trigger = true;
@@ -979,14 +986,14 @@ mod tests {
         let _ = update(
             &mut state,
             key_press(
-                Key::Character("j".into()),
-                Code::KeyJ,
+                Key::Named(Named::F9),
+                Code::F9,
                 Modifiers::empty(),
                 false,
             ),
         );
 
-        let expected = TriggerKey::try_create(0x4A).unwrap();
+        let expected = TriggerKey::try_create(0x78).unwrap();
         assert_eq!(expected, state.settings.trigger());
         assert!(!state.capturing_trigger);
         assert_eq!(IDLE_TRIGGER_HINT, state.trigger_hint);
@@ -1049,14 +1056,14 @@ mod tests {
 
         let expected = [
             format!("Hyperkey version: {}", env!("CARGO_PKG_VERSION")),
-            "Enabled: false".to_string(),
+            "Enabled: False".to_string(),
             "Trigger: Caps Lock".to_string(),
             "Output modifiers: Control, Alt, Shift".to_string(),
             "Input status: Stopped".to_string(),
             "Input status error: None".to_string(),
             "Last automatic hook recovery: None".to_string(),
-            "Launch at login: true".to_string(),
-            "Launch to tray: false".to_string(),
+            "Launch at login: True".to_string(),
+            "Launch to tray: False".to_string(),
             "Diagnostic message: None".to_string(),
             "Recovery message: None".to_string(),
         ]

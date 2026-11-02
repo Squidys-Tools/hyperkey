@@ -113,36 +113,43 @@ fn decode_text(bytes: &[u8]) -> String {
     const UTF16_BE_BOM: &[u8] = &[0xFE, 0xFF];
 
     if bytes.starts_with(UTF32_LE_BOM) {
-        let (units, _) = bytes[4..].as_chunks::<4>();
-        return units
-            .iter()
-            .map(|unit| decode_utf32_unit(u32::from_le_bytes(*unit)))
-            .collect();
+        return decode_utf32(&bytes[4..], u32::from_le_bytes);
     }
     if bytes.starts_with(UTF32_BE_BOM) {
-        let (units, _) = bytes[4..].as_chunks::<4>();
-        return units
-            .iter()
-            .map(|unit| decode_utf32_unit(u32::from_be_bytes(*unit)))
-            .collect();
+        return decode_utf32(&bytes[4..], u32::from_be_bytes);
     }
     if bytes.starts_with(UTF16_LE_BOM) {
-        let (pairs, _) = bytes[2..].as_chunks::<2>();
-        let units = pairs
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .collect::<Vec<u16>>();
-        return String::from_utf16_lossy(&units);
+        return decode_utf16(&bytes[2..], u16::from_le_bytes);
     }
     if bytes.starts_with(UTF16_BE_BOM) {
-        let (pairs, _) = bytes[2..].as_chunks::<2>();
-        let units = pairs
-            .iter()
-            .map(|pair| u16::from_be_bytes(*pair))
-            .collect::<Vec<u16>>();
-        return String::from_utf16_lossy(&units);
+        return decode_utf16(&bytes[2..], u16::from_be_bytes);
     }
     String::from_utf8_lossy(bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes)).into_owned()
+}
+
+/// Decodes UTF-32 units; a dangling 1–3 byte tail becomes U+FFFD, matching
+/// the .NET decoder instead of being silently dropped.
+fn decode_utf32(bytes: &[u8], from_bytes: fn([u8; 4]) -> u32) -> String {
+    let (units, tail) = bytes.as_chunks::<4>();
+    let mut text: String = units
+        .iter()
+        .map(|unit| decode_utf32_unit(from_bytes(*unit)))
+        .collect();
+    if !tail.is_empty() {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
+}
+
+/// Decodes UTF-16 units; a dangling byte becomes U+FFFD for the same reason.
+fn decode_utf16(bytes: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
+    let (pairs, tail) = bytes.as_chunks::<2>();
+    let units = pairs.iter().map(|pair| from_bytes(*pair)).collect::<Vec<u16>>();
+    let mut text = String::from_utf16_lossy(&units);
+    if !tail.is_empty() {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
 }
 
 fn decode_utf32_unit(unit: u32) -> char {
