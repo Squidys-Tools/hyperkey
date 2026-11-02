@@ -96,35 +96,66 @@ pub fn parse(json: &str) -> ParseOutcome {
 
 /// Decodes a settings file's raw bytes the way the C# `File.ReadAllText` did
 /// — a UTF-8 BOM is ignored, a UTF-16 LE or BE BOM (Notepad's "Unicode"
-/// output) is transcoded — then parses. Anything else is decoded as UTF-8
-/// lossily, so a stray invalid byte reaches the tolerant parser instead of
-/// failing at the read.
+/// output) is transcoded, and UTF-32 BOMs are handled the same way — then
+/// parses. Anything else is decoded as UTF-8 lossily, so a stray invalid
+/// byte reaches the tolerant parser instead of failing at the read.
 pub fn parse_bytes(bytes: &[u8]) -> ParseOutcome {
     parse(&decode_text(bytes))
 }
 
 fn decode_text(bytes: &[u8]) -> String {
     const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+    // The C# `File.ReadAllText` also recognized UTF-32. Its LE BOM must be
+    // checked before UTF-16 LE because they share the same two-byte lead.
+    const UTF32_LE_BOM: &[u8] = &[0xFF, 0xFE, 0x00, 0x00];
+    const UTF32_BE_BOM: &[u8] = &[0x00, 0x00, 0xFE, 0xFF];
     const UTF16_LE_BOM: &[u8] = &[0xFF, 0xFE];
     const UTF16_BE_BOM: &[u8] = &[0xFE, 0xFF];
 
+    if bytes.starts_with(UTF32_LE_BOM) {
+        return decode_utf32(&bytes[4..], u32::from_le_bytes);
+    }
+    if bytes.starts_with(UTF32_BE_BOM) {
+        return decode_utf32(&bytes[4..], u32::from_be_bytes);
+    }
     if bytes.starts_with(UTF16_LE_BOM) {
-        let (pairs, _) = bytes[2..].as_chunks::<2>();
-        let units = pairs
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .collect::<Vec<u16>>();
-        return String::from_utf16_lossy(&units);
+        return decode_utf16(&bytes[2..], u16::from_le_bytes);
     }
     if bytes.starts_with(UTF16_BE_BOM) {
-        let (pairs, _) = bytes[2..].as_chunks::<2>();
-        let units = pairs
-            .iter()
-            .map(|pair| u16::from_be_bytes(*pair))
-            .collect::<Vec<u16>>();
-        return String::from_utf16_lossy(&units);
+        return decode_utf16(&bytes[2..], u16::from_be_bytes);
     }
     String::from_utf8_lossy(bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes)).into_owned()
+}
+
+/// Decodes UTF-32 units; a dangling 1–3 byte tail becomes U+FFFD, matching
+/// the .NET decoder instead of being silently dropped.
+fn decode_utf32(bytes: &[u8], from_bytes: fn([u8; 4]) -> u32) -> String {
+    let (units, tail) = bytes.as_chunks::<4>();
+    let mut text: String = units
+        .iter()
+        .map(|unit| decode_utf32_unit(from_bytes(*unit)))
+        .collect();
+    if !tail.is_empty() {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
+}
+
+/// Decodes UTF-16 units; a dangling byte becomes U+FFFD for the same reason.
+fn decode_utf16(bytes: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
+    let (pairs, tail) = bytes.as_chunks::<2>();
+    let units = pairs.iter().map(|pair| from_bytes(*pair)).collect::<Vec<u16>>();
+    let mut text = String::from_utf16_lossy(&units);
+    if !tail.is_empty() {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
+}
+
+fn decode_utf32_unit(unit: u32) -> char {
+    // Out-of-range code points — lone surrogates included — become the
+    // replacement character, matching the lossy UTF-16 paths above.
+    char::from_u32(unit).unwrap_or(char::REPLACEMENT_CHARACTER)
 }
 
 fn parse_inner(json: &str) -> Result<(HyperkeySettings, Vec<String>), (bool, String)> {
@@ -193,7 +224,7 @@ fn parse_inner(json: &str) -> Result<(HyperkeySettings, Vec<String>), (bool, Str
 }
 
 fn parse_modifiers(
-    values: Option<&[String]>,
+    values: Option<&[Option<String>]>,
     repairs: &mut Vec<String>,
 ) -> Vec<OutputModifier> {
     let reset = |repairs: &mut Vec<String>| {
@@ -211,15 +242,17 @@ fn parse_modifiers(
     let mut parsed = Vec::with_capacity(values.len());
     let mut dropped_invalid = false;
     for value in values {
-        let modifier = if value.eq_ignore_ascii_case("Control") {
-            OutputModifier::Control
-        } else if value.eq_ignore_ascii_case("Alt") {
-            OutputModifier::Alt
-        } else if value.eq_ignore_ascii_case("Shift") {
-            OutputModifier::Shift
-        } else {
-            dropped_invalid = true;
-            continue;
+        // A null element is just another invalid entry: the C# field was
+        // `string?[]` and dropped it individually rather than failing the
+        // whole document.
+        let modifier = match value.as_deref() {
+            Some(name) if name.eq_ignore_ascii_case("Control") => OutputModifier::Control,
+            Some(name) if name.eq_ignore_ascii_case("Alt") => OutputModifier::Alt,
+            Some(name) if name.eq_ignore_ascii_case("Shift") => OutputModifier::Shift,
+            _ => {
+                dropped_invalid = true;
+                continue;
+            }
         };
 
         if parsed.contains(&modifier) {
@@ -298,13 +331,15 @@ struct PersistedSettingsWrite {
 /// Read side of the persisted document. Property names are matched
 /// case-insensitively, like the C# `PropertyNameCaseInsensitive` option.
 /// A field holding the wrong JSON type fails the whole read, like the C#
-/// `JsonException` path; a `null` field reads as absent.
+/// `JsonException` path; a `null` field reads as absent, and a `null`
+/// element inside `outputModifiers` is treated as one invalid value —
+/// the C# field was `string?[]`.
 #[derive(Default)]
 struct PersistedSettingsRead {
     schema_version: Option<i64>,
     enabled: Option<bool>,
     trigger: Option<String>,
-    output_modifiers: Option<Vec<String>>,
+    output_modifiers: Option<Vec<Option<String>>>,
     launch_at_startup: Option<bool>,
     launch_to_tray: Option<bool>,
     tap_behavior: Option<String>,
