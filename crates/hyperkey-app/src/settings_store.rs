@@ -349,4 +349,47 @@ mod tests {
         assert!(result.message.is_none());
         let _ = fs::remove_dir_all(&directory);
     }
+
+    #[test]
+    fn save_replaces_an_existing_file() {
+        // The temp-file rename must replace, not append or fail: a second
+        // save over an existing settings.json wins cleanly.
+        let directory = test_directory("overwrite");
+        let store = SettingsStore::at(&directory);
+
+        store
+            .save(&HyperkeySettings::defaults().with_enabled(false))
+            .unwrap();
+        let updated = HyperkeySettings::defaults().with_launch_to_tray(true);
+        store.save(&updated).unwrap();
+
+        let result = store.load();
+        assert_eq!(updated, result.settings);
+        // The atomic write leaves no temporary file behind.
+        assert!(!store.temporary_settings_path.exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_is_removed_on_load() {
+        // A crash mid-save can leave settings.json.tmp behind; the C# store
+        // deleted it on the next load so a stale partial write never masks
+        // the real file.
+        let directory = test_directory("leftover-tmp");
+        fs::create_dir_all(&directory).unwrap();
+        let store = SettingsStore::at(&directory);
+        fs::write(
+            &store.settings_path,
+            json::serialize(&HyperkeySettings::defaults().with_enabled(false)),
+        )
+        .unwrap();
+        fs::write(&store.temporary_settings_path, "half-written").unwrap();
+
+        let result = store.load();
+
+        assert!(!result.settings.enabled());
+        assert!(result.message.is_none());
+        assert!(!store.temporary_settings_path.exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
 }

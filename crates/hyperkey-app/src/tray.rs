@@ -105,3 +105,33 @@ fn hyperkey_icon(running: bool) -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(icon_rgba(running), 32, 32)
         .expect("the generated tray icon has valid dimensions and stride")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_text_reflects_the_enabled_state() {
+        // The C# checkable item showed the same two strings.
+        assert_eq!("Hyperkey: On", toggle_text(true));
+        assert_eq!("Hyperkey: Off", toggle_text(false));
+    }
+
+    #[test]
+    fn the_icon_marks_engine_health() {
+        // The C# icon distinguished a live hook from a stopped or failed
+        // one: accent fill while running, muted otherwise, and a white "H"
+        // glyph either way.
+        let running = icon_rgba(true);
+        let stopped = icon_rgba(false);
+
+        assert_eq!(32 * 32 * 4, running.len());
+        // (2, 2) is the first interior pixel — solid fill, no glyph.
+        assert_eq!(&ACCENT[..], &running[(2 * 32 + 2) * 4..][..4]);
+        assert_eq!(&MUTED[..], &stopped[(2 * 32 + 2) * 4..][..4]);
+        // (10, 10) is inside the left upright of the H — white either way.
+        let glyph = (10 * 32 + 10) * 4;
+        assert_eq!(&WHITE[..], &running[glyph..][..4]);
+        assert_eq!(&WHITE[..], &stopped[glyph..][..4]);
+    }
+}

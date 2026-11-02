@@ -9,14 +9,21 @@ use windows::core::PCWSTR;
 
 pub struct SingleInstance(HANDLE);
 
+/// The mutex name the C# build used, kept identical so the Rust and C#
+/// builds cannot run side by side either.
+const MUTEX_NAME: &str = "Local\\Hyperkey.SingleInstance";
+
 /// Returns `Ok(None)` when another Hyperkey instance already owns the mutex
 /// and `Err` when Windows could not create it at all — a create failure is
 /// not a running instance and must not look like one.
 pub fn acquire() -> Result<Option<SingleInstance>, String> {
-    let name: Vec<u16> = "Local\\Hyperkey.SingleInstance"
-        .encode_utf16()
-        .chain(once(0))
-        .collect();
+    acquire_named(MUTEX_NAME)
+}
+
+/// Separated from `acquire` so tests can prove the guard contract against a
+/// throwaway name instead of the real process mutex.
+fn acquire_named(name: &str) -> Result<Option<SingleInstance>, String> {
+    let name: Vec<u16> = name.encode_utf16().chain(once(0)).collect();
     // SAFETY: FFI call; `name` is a valid nul-terminated UTF-16 buffer.
     let handle = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) };
     match handle {
@@ -55,5 +62,40 @@ impl Drop for SingleInstance {
             let _ = ReleaseMutex(self.0);
             let _ = CloseHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_guard_blocks_a_second_acquire_until_it_is_dropped() {
+        // The contract behind the C# TryAcquire: an owned named mutex
+        // reports "already running", and dropping the guard frees the name
+        // for the next instance.
+        let name = format!("Local\\Hyperkey.SingleInstance.test.{}", std::process::id());
+        let first = acquire_named(&name).expect("the guard can be created");
+
+        assert!(first.is_some());
+        assert!(
+            acquire_named(&name).expect("a second create succeeds").is_none(),
+            "a held guard must report the name as taken"
+        );
+
+        drop(first);
+        assert!(
+            acquire_named(&name)
+                .expect("the guard can be created again")
+                .is_some(),
+            "releasing the guard must free the name"
+        );
+    }
+
+    #[test]
+    fn the_shared_mutex_name_matches_the_csharp_build() {
+        // The two builds cannot run side by side either, so the name must
+        // stay the C# MutexName verbatim.
+        assert_eq!(r"Local\Hyperkey.SingleInstance", MUTEX_NAME);
     }
 }

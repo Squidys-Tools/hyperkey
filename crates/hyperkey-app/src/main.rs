@@ -759,3 +759,310 @@ fn main() -> iced::Result {
         .theme(theme)
         .run()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::keyboard::{Location, Modifiers};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn test_directory(name: &str) -> PathBuf {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "hyperkey-app-test-{}-{name}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    /// A state whose engine is never started and whose store writes to a
+    /// temp directory, so `update` can run headless. `enabled` stays false
+    /// except where a test changes it, so the update paths exercise the
+    /// engine's stop/no-op branch instead of installing a real hook.
+    fn state_in(directory: &Path) -> State {
+        let settings = HyperkeySettings::defaults().with_enabled(false);
+        let engine = InputEngine::new(settings.trigger(), settings.output_modifiers().to_vec());
+        State {
+            settings,
+            store: SettingsStore::at(directory),
+            engine,
+            tray: None,
+            settings_window: None,
+            banner: None,
+            diagnostic_message: None,
+            startup_error: None,
+            copy_status: None,
+            capturing_trigger: false,
+            trigger_hint: IDLE_TRIGGER_HINT,
+            modifier_hint: MODIFIER_CHOICE_HINT,
+            focus: None,
+            last_engine_status: InputEngineStatus::Stopped,
+            system_mode: theme::Mode::None,
+            is_quitting: false,
+        }
+    }
+
+    fn key_press(key: Key, code: Code, modifiers: Modifiers, repeat: bool) -> Message {
+        Message::KeyboardEvent(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: Physical::Code(code),
+            location: Location::Standard,
+            modifiers,
+            text: None,
+            repeat,
+        })
+    }
+
+    #[test]
+    fn emergency_disable_never_persists_the_disabled_state() {
+        // The C# emergency path reset the engine without touching the file:
+        // the next launch must be enabled again, so the persisted settings
+        // still say enabled even after the action ran.
+        let directory = test_directory("emergency");
+        let mut state = state_in(&directory);
+        state.settings = state.settings.with_enabled(true);
+        state.store.save(&state.settings).unwrap();
+
+        let _ = update(&mut state, Message::EmergencyDisable);
+
+        assert!(!state.settings.enabled());
+        let loaded = state.store.load();
+        assert!(
+            loaded.settings.enabled(),
+            "the persisted file must still say enabled"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_last_modifier_cannot_be_deselected() {
+        // The C# window re-checked the box instead of producing an empty
+        // modifier set: the settings and the file are left untouched.
+        let directory = test_directory("last-modifier");
+        let mut state = state_in(&directory);
+        state.settings = state
+            .settings
+            .with_output_modifiers(vec![OutputModifier::Control])
+            .expect("a single modifier is valid");
+
+        let _ = update(
+            &mut state,
+            Message::ModifierToggled(OutputModifier::Control, false),
+        );
+
+        assert_eq!(
+            &[OutputModifier::Control],
+            state.settings.output_modifiers()
+        );
+        assert_eq!(MODIFIER_REQUIRED_HINT, state.modifier_hint);
+        assert!(!directory.join("settings.json").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_valid_modifier_toggle_is_persisted() {
+        let directory = test_directory("modifier-toggle");
+        let mut state = state_in(&directory);
+
+        let _ = update(
+            &mut state,
+            Message::ModifierToggled(OutputModifier::Alt, false),
+        );
+
+        assert_eq!(
+            &[OutputModifier::Control, OutputModifier::Shift],
+            state.settings.output_modifiers()
+        );
+        let loaded = state.store.load();
+        assert_eq!(
+            state.settings.output_modifiers(),
+            loaded.settings.output_modifiers()
+        );
+        assert!(!directory.join("settings.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn escape_cancels_trigger_capture() {
+        // Escape is the documented cancel gesture and can never itself
+        // become the trigger.
+        let directory = test_directory("escape-cancel");
+        let mut state = state_in(&directory);
+        state.capturing_trigger = true;
+        state.trigger_hint = CAPTURE_TRIGGER_HINT;
+
+        let _ = update(
+            &mut state,
+            key_press(
+                Key::Named(Named::Escape),
+                Code::Escape,
+                Modifiers::empty(),
+                false,
+            ),
+        );
+
+        assert!(!state.capturing_trigger);
+        assert_eq!(IDLE_TRIGGER_HINT, state.trigger_hint);
+        assert_eq!(TriggerKey::CAPS_LOCK, state.settings.trigger());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn modifier_and_system_keys_reject_during_capture() {
+        // The C# IsModifierOrSystemKey + HasHeldModifiers check: a chord can
+        // never be the trigger, and the hint says so.
+        let directory = test_directory("modifier-reject");
+        let mut state = state_in(&directory);
+        state.capturing_trigger = true;
+
+        let _ = update(
+            &mut state,
+            key_press(
+                Key::Named(Named::Control),
+                Code::ControlLeft,
+                Modifiers::empty(),
+                false,
+            ),
+        );
+        assert!(state.capturing_trigger);
+        assert_eq!(MODIFIER_KEY_HINT, state.trigger_hint);
+
+        // A normal key pressed while a modifier is held rejects the same way.
+        let _ = update(
+            &mut state,
+            key_press(
+                Key::Character("j".into()),
+                Code::KeyJ,
+                Modifiers::CTRL,
+                false,
+            ),
+        );
+        assert!(state.capturing_trigger);
+        assert_eq!(MODIFIER_KEY_HINT, state.trigger_hint);
+        assert_eq!(TriggerKey::CAPS_LOCK, state.settings.trigger());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_held_key_repeat_cannot_bind_itself() {
+        // The press that started capture auto-repeats while held; repeats
+        // are ignored so the activating key cannot bind itself.
+        let directory = test_directory("repeat");
+        let mut state = state_in(&directory);
+        state.capturing_trigger = true;
+
+        let _ = update(
+            &mut state,
+            key_press(
+                Key::Named(Named::Enter),
+                Code::Enter,
+                Modifiers::empty(),
+                true,
+            ),
+        );
+
+        assert!(state.capturing_trigger);
+        assert_eq!(TriggerKey::CAPS_LOCK, state.settings.trigger());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_printable_key_rebinds_the_trigger_and_persists() {
+        // The KeyInterop/VkKeyScan path: a normal key captures to the
+        // corresponding virtual key and is saved.
+        let directory = test_directory("rebind");
+        let mut state = state_in(&directory);
+        state.capturing_trigger = true;
+
+        let _ = update(
+            &mut state,
+            key_press(
+                Key::Character("j".into()),
+                Code::KeyJ,
+                Modifiers::empty(),
+                false,
+            ),
+        );
+
+        let expected = TriggerKey::try_create(0x4A).unwrap();
+        assert_eq!(expected, state.settings.trigger());
+        assert!(!state.capturing_trigger);
+        assert_eq!(IDLE_TRIGGER_HINT, state.trigger_hint);
+        let loaded = state.store.load();
+        assert_eq!(expected, loaded.settings.trigger());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn tab_and_shift_tab_move_the_focus_ring() {
+        // The explicit focus ring: Tab moves forward and wraps; Shift+Tab
+        // moves backward and wraps the other way.
+        let directory = test_directory("focus-ring");
+        let mut state = state_in(&directory);
+        state.focus = Some(FocusTarget::EnabledToggle);
+
+        let _ = update(
+            &mut state,
+            key_press(Key::Named(Named::Tab), Code::Tab, Modifiers::empty(), false),
+        );
+        assert_eq!(Some(FocusTarget::RebindTrigger), state.focus);
+
+        state.focus = Some(FocusTarget::CopyDetails);
+        let _ = update(
+            &mut state,
+            key_press(Key::Named(Named::Tab), Code::Tab, Modifiers::empty(), false),
+        );
+        assert_eq!(Some(FocusTarget::EnabledToggle), state.focus);
+
+        let _ = update(
+            &mut state,
+            key_press(Key::Named(Named::Tab), Code::Tab, Modifiers::SHIFT, false),
+        );
+        assert_eq!(Some(FocusTarget::CopyDetails), state.focus);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn restart_hook_while_disabled_reports_the_csharp_message() {
+        // C# RestartInputEngine refused the request while disabled instead
+        // of silently starting the hook.
+        let directory = test_directory("restart-disabled");
+        let mut state = state_in(&directory);
+
+        let _ = update(&mut state, Message::RestartHook);
+
+        assert_eq!(
+            "Enable Hyperkey before restarting the keyboard hook.",
+            state.diagnostic_message.as_deref().unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn diagnostic_details_match_the_csharp_block() {
+        // The C# DiagnosticDetails text, field for field — the copy-paste
+        // block support requests expect.
+        let directory = test_directory("diagnostics");
+        let state = state_in(&directory);
+
+        let expected = [
+            format!("Hyperkey version: {}", env!("CARGO_PKG_VERSION")),
+            "Enabled: false".to_string(),
+            "Trigger: Caps Lock".to_string(),
+            "Output modifiers: Control, Alt, Shift".to_string(),
+            "Input status: Stopped".to_string(),
+            "Input status error: None".to_string(),
+            "Last automatic hook recovery: None".to_string(),
+            "Launch at login: true".to_string(),
+            "Launch to tray: false".to_string(),
+            "Diagnostic message: None".to_string(),
+            "Recovery message: None".to_string(),
+        ]
+        .join("\r\n");
+
+        assert_eq!(expected, diagnostic_details(&state));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+}

@@ -170,16 +170,7 @@ unsafe extern "system" fn wnd_proc(
         let context = GetWindowLongPtrW(window, GWLP_USERDATA) as *const Context;
         if !context.is_null() {
             let context = &*context;
-            let code = wparam.0 as u32;
-            let reconcile = (message == WM_POWERBROADCAST
-                && matches!(
-                    code,
-                    PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMECRITICAL | PBT_APMRESUMESUSPEND
-                ))
-                || (message == WM_WTSSESSION_CHANGE
-                    && matches!(code, WTS_SESSION_LOCK | WTS_SESSION_UNLOCK))
-                || message == WM_DISPLAYCHANGE;
-            if reconcile {
+            if needs_reconcile(message, wparam.0 as u32) {
                 (context.notify)(SessionEvent::ReconcileEngine);
             } else if context.show_settings != 0 && message == context.show_settings {
                 (context.notify)(SessionEvent::ShowSettings);
@@ -190,6 +181,56 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
+/// The session notifications that require input reconciliation: power
+/// resumes (the C# `PowerModes.Resume` handler), session lock/unlock (the
+/// C# `SessionLock`/`SessionUnlock` handler), and display changes. Other
+/// power and session codes — suspends, console connect/disconnect — do
+/// not change input state and are ignored.
+fn needs_reconcile(message: u32, code: u32) -> bool {
+    (message == WM_POWERBROADCAST
+        && matches!(
+            code,
+            PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMECRITICAL | PBT_APMRESUMESUSPEND
+        ))
+        || (message == WM_WTSSESSION_CHANGE
+            && matches!(code, WTS_SESSION_LOCK | WTS_SESSION_UNLOCK))
+        || message == WM_DISPLAYCHANGE
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        PBT_APMSUSPEND, WM_USER, WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT,
+    };
+
+    #[test]
+    fn resume_lock_unlock_and_display_change_reconcile() {
+        // The events the C# app stopped/restarted its engine on — plus the
+        // display-change case this port also covers.
+        assert!(needs_reconcile(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC));
+        assert!(needs_reconcile(WM_POWERBROADCAST, PBT_APMRESUMECRITICAL));
+        assert!(needs_reconcile(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND));
+        assert!(needs_reconcile(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK));
+        assert!(needs_reconcile(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK));
+        assert!(needs_reconcile(WM_DISPLAYCHANGE, 0));
+    }
+
+    #[test]
+    fn unrelated_session_notifications_do_not_reconcile() {
+        // Suspending does not disturb input state — the C# engine only
+        // recovered on resume. Console/remote connect transitions likewise
+        // carry no modifier state to reset.
+        assert!(!needs_reconcile(WM_POWERBROADCAST, PBT_APMSUSPEND));
+        assert!(!needs_reconcile(WM_WTSSESSION_CHANGE, WTS_CONSOLE_CONNECT));
+        assert!(!needs_reconcile(WM_WTSSESSION_CHANGE, WTS_REMOTE_CONNECT));
+        // Cross-namespace checks are impossible: PBT_APMRESUMESUSPEND and
+        // WTS_SESSION_LOCK share the value 0x7, and Windows never sends one
+        // namespace's code on the other's message anyway.
+        assert!(!needs_reconcile(WM_USER, WTS_SESSION_LOCK));
+    }
 }
