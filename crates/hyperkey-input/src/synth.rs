@@ -104,10 +104,17 @@ impl ModifierSynthesizer {
         };
 
         let inputs = [create_input(scan_code, false), create_input(scan_code, true)];
-        if send(&inputs) == inputs.len() as u32 {
+        let sent = send(&inputs);
+        if sent == inputs.len() as u32 {
             return Ok(());
         }
 
+        // A partial send can leave the replay's key-down injected with no
+        // release; push the events SendInput skipped so the trigger cannot
+        // stick held.
+        if sent > 0 {
+            send(&inputs[usize::min(sent as usize, inputs.len())..]);
+        }
         Err(format!(
             "Windows rejected the trigger-key tap replay. {}",
             windows::core::Error::from_thread()
