@@ -235,7 +235,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::EmergencyDisable => {
-            emergency_disable(state);
+            apply_emergency_disable(state);
             Task::none()
         }
         Message::CopyDetails => {
@@ -445,7 +445,7 @@ fn activate_focused(state: &mut State) {
             );
         }
         Some(FocusTarget::RestartHook) => restart_hook(state),
-        Some(FocusTarget::EmergencyDisable) => emergency_disable(state),
+        Some(FocusTarget::EmergencyDisable) => apply_emergency_disable(state),
         Some(FocusTarget::CopyDetails) => copy_details(state),
         None => {}
     }
@@ -466,7 +466,7 @@ fn toggle_enabled(state: &mut State) {
 /// Emergency disable releases the modifier layer and stops the engine, but
 /// deliberately does not persist `enabled = false`: the next launch
 /// reactivates unless the user toggles the setting off.
-fn emergency_disable(state: &mut State) {
+fn apply_emergency_disable(state: &mut State) {
     state.engine.emergency_disable();
     update_settings(state, state.settings.with_enabled(false), false);
 }
