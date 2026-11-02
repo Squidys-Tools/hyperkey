@@ -66,7 +66,7 @@ To build the installer locally:
 .\scripts\package-installer.ps1
 ```
 
-That writes the publish output to `publish\win-x64` and the installer to `publish\installer`. The version number comes from `Directory.Build.props`; pass `-Version` to override it.
+That writes the publish output to `publish\app` and the installer to `publish\installer`. The version number comes from `Directory.Build.props`; pass `-Version` to override it.
 
 To check what the installer actually does:
 
