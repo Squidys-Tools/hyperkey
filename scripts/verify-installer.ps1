@@ -513,8 +513,9 @@ finally {
 
     if ($cleanupFailed -or -not $verificationPassed) {
         # Keep the Inno logs and the settings backup whenever the run did not
-        # pass: they are the diagnosis and recovery material. A clean pass
-        # leaves nothing worth keeping.
+        # pass or the cleanup could not restore this machine: they are the
+        # diagnosis and recovery material. A clean pass leaves nothing worth
+        # keeping.
         Write-Host "    logs and settings backup kept at $workDirectory" -ForegroundColor Yellow
     }
     else {
