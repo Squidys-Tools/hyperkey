@@ -612,3 +612,55 @@ fn stray_trigger_key_up_passes_through_without_a_replay() {
     assert_eq!(TriggerPhase::Idle, transition.state.phase);
     assert!(matches!(transition.decision, InputDecision::PassThrough));
 }
+
+#[test]
+fn synthetic_trigger_release_does_not_end_a_hold() {
+    // The engine's own SendInput is tagged and must never re-enter the
+    // machine: a synthetic trigger key-up arriving mid-hold cannot be
+    // mistaken for the real release — it neither replays a tap nor ends
+    // the hold.
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let synthetic_up = process(
+        held.state,
+        KeyboardEvent::synthetic(VirtualKey::CAPS_LOCK, KeyTransition::Up),
+    );
+
+    assert_eq!(TriggerPhase::TriggerHeld, synthetic_up.state.phase);
+    assert!(matches!(
+        synthetic_up.decision,
+        InputDecision::PassThrough
+    ));
+
+    // The still-held trigger activates the layer on the next real key.
+    let active = process(synthetic_up.state, key(0x41, KeyTransition::Down));
+    assert_eq!(TriggerPhase::HyperActive, active.state.phase);
+    assert!(matches!(
+        active.decision,
+        InputDecision::PressAndForward(_)
+    ));
+}
+
+#[test]
+fn synthetic_trigger_release_does_not_disengage_the_layer() {
+    // Same guarantee while the layer is engaged: a synthetic trigger key-up
+    // passes through, and the layer stays up until the real release.
+    let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
+    let active = process(held.state, key(0x41, KeyTransition::Down));
+    let synthetic_up = process(
+        active.state,
+        KeyboardEvent::synthetic(VirtualKey::CAPS_LOCK, KeyTransition::Up),
+    );
+
+    assert_eq!(TriggerPhase::HyperActive, synthetic_up.state.phase);
+    assert!(matches!(
+        synthetic_up.decision,
+        InputDecision::PassThrough
+    ));
+
+    let released = process(synthetic_up.state, caps_lock(KeyTransition::Up));
+    assert!(matches!(
+        released.decision,
+        InputDecision::ReleaseAndSuppress(_)
+    ));
+    assert_eq!(TriggerPhase::Idle, released.state.phase);
+}

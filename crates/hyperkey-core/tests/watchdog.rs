@@ -45,3 +45,15 @@ fn heartbeat_boundary_is_exact() {
     assert_eq!(HookWatchdogAction::SendProbe, watchdog.tick(149));
     assert_eq!(HookWatchdogAction::ReinstallHook, watchdog.tick(150));
 }
+
+#[test]
+fn ticks_earlier_than_the_last_heartbeat_still_probe() {
+    // The age computation saturates: a tick that reads earlier than the
+    // last heartbeat — a wrapped or regressed tick source — must not look
+    // like a dead hook and trigger a reinstall storm.
+    let watchdog = HookWatchdog::new(DEAD_AFTER, 0);
+    watchdog.heartbeat(500);
+
+    assert_eq!(HookWatchdogAction::SendProbe, watchdog.tick(400));
+    assert_eq!(HookWatchdogAction::SendProbe, watchdog.tick(0));
+}
