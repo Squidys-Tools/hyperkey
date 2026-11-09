@@ -9,7 +9,7 @@
 //!
 //! A real (but never-shown) top-level window is used instead of a message-only
 //! window because only top-level windows receive these broadcast messages.
-//! Each notification is forwarded to the iced daemon through a plain callback.
+//! Each notification is forwarded to the app through a plain callback.
 use std::iter::once;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -30,7 +30,7 @@ use windows::core::PCWSTR;
 const CLASS_NAME: &str = "Hyperkey.SessionWindow";
 const SHOW_SETTINGS_MESSAGE: &str = "Hyperkey.ShowSettings";
 
-/// What the daemon should do in response to a session notification.
+/// What the app should do in response to a session notification.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SessionEvent {
     /// Sleep/resume, session lock/unlock, or a display change: the engine must
@@ -45,7 +45,7 @@ pub enum SessionEvent {
 }
 
 /// Starts the hidden-window thread. `notify` is invoked on that thread; it
-/// must be cheap and non-blocking (the app forwards to an iced channel).
+/// must be cheap and non-blocking (the app forwards to an app channel).
 /// There is no shutdown path: the thread and window die with the process.
 pub fn spawn(notify: impl Fn(SessionEvent) + Send + 'static) {
     let _ = std::thread::Builder::new()

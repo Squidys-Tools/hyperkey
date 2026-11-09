@@ -41,6 +41,30 @@
 //!
 //! `synth::ModifierSynthesizer` sends the generated modifier layer, trigger
 //! tap replays, and watchdog liveness probes through `SendInput`.
+//!
+//! # Key capture (`capture::KeyCapture`)
+//!
+//! One-shot capture of the exact virtual key the engine's hook will see, for
+//! trigger rebinding in the settings window:
+//!
+//! ```text
+//! struct CapturedKey { virtual_key: u16, scan_code: u16, extended: bool, modifiers_held: bool }
+//! KeyCapture::start(on_key: impl Fn(CapturedKey) + Send + 'static) -> Result<KeyCapture, String>
+//! impl Drop for KeyCapture             // posts WM_QUIT, unhooks, joins
+//! ```
+//!
+//! - `start` spawns a "Hyperkey key capture" thread with its own
+//!   `WH_KEYBOARD_LL` hook and returns once the hook is installed (`Err` with a
+//!   user-facing message if the install fails or takes about two seconds).
+//! - `on_key` runs on the hook thread for each fresh key-down while a window
+//!   of this process is foreground; it must return quickly (forward to a
+//!   channel). Pass the result to `hyperkey_core::keys::classify_capture`.
+//! - Captured keys are suppressed on both edges (so Caps Lock does not
+//!   toggle), auto-repeats are suppressed, Hyperkey's own tagged output and
+//!   events for other processes' windows pass through (input injected by
+//!   other tools is captured, since the engine acts on it too), and a key already held when capture started (such as the Enter
+//!   that opened it) keeps flowing and is never reported.
 
+pub mod capture;
 pub mod engine;
 pub mod synth;

@@ -1,7 +1,7 @@
 //! Single-instance guard, mirroring the C# named-mutex service. The handle is
 //! held for the process lifetime so a second launch exits immediately — after
 //! asking the running instance to raise its settings window.
-use crate::session_window;
+use super::session_window;
 use std::iter::once;
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};

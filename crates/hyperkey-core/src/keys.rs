@@ -221,3 +221,167 @@ impl fmt::Display for TriggerKey {
         f.write_str(&self.display_label())
     }
 }
+
+const VK_ESCAPE: u16 = 0x1B;
+
+/// What the settings window should do with a key captured while rebinding the
+/// trigger.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CaptureDecision {
+    /// Escape: abandon the rebind.
+    Cancel,
+    /// A modifier, OS, or IME key (or any key pressed with a modifier held):
+    /// show the specific "modifier keys can't be used" hint.
+    ModifierOrSystem,
+    /// A key outside the trigger allowlist, or an extended-scan-code key.
+    Unsupported,
+    /// A legal trigger key.
+    Accept(TriggerKey),
+}
+
+/// Classifies a captured key press. `extended` is the hook's extended-key
+/// flag; extended-scan-code keys are rejected because tap-replay synthesizes a
+/// plain scan code (and numpad Enter shares `VK_RETURN` with main Enter).
+/// `modifiers_held` is true when Shift/Ctrl/Alt/Win was already down, which
+/// makes the press a chord rather than a bare key.
+pub fn classify_capture(virtual_key: u16, extended: bool, modifiers_held: bool) -> CaptureDecision {
+    if virtual_key == VK_ESCAPE {
+        return CaptureDecision::Cancel;
+    }
+    if is_modifier_or_system_key(virtual_key) || modifiers_held {
+        return CaptureDecision::ModifierOrSystem;
+    }
+    if extended {
+        return CaptureDecision::Unsupported;
+    }
+    match TriggerKey::try_create(virtual_key) {
+        Some(key) => CaptureDecision::Accept(key),
+        None => CaptureDecision::Unsupported,
+    }
+}
+
+/// Modifier, OS, and IME-side virtual keys that can never be the trigger.
+/// Escape is deliberately absent: it is the cancel key.
+pub fn is_modifier_or_system_key(virtual_key: u16) -> bool {
+    matches!(
+        virtual_key,
+        0x10 // VK_SHIFT
+            | 0x11 // VK_CONTROL
+            | 0x12 // VK_MENU (Alt)
+            | 0x15 // VK_KANA / VK_HANGUL
+            | 0x16 // VK_IME_ON
+            | 0x17 // VK_JUNJA
+            | 0x18 // VK_FINAL
+            | 0x19 // VK_KANJI / VK_HANJA
+            | 0x1A // VK_IME_OFF
+            | 0x1C // VK_CONVERT
+            | 0x1D // VK_NONCONVERT
+            | 0x1E // VK_ACCEPT
+            | 0x1F // VK_MODECHANGE
+            | 0x5B // VK_LWIN
+            | 0x5C // VK_RWIN
+            | 0x5D // VK_APPS
+            | 0xA0 // VK_LSHIFT
+            | 0xA1 // VK_RSHIFT
+            | 0xA2 // VK_LCONTROL
+            | 0xA3 // VK_RCONTROL
+            | 0xA4 // VK_LMENU
+            | 0xA5 // VK_RMENU
+            | 0xE5 // VK_PROCESSKEY
+            | 0xE7 // VK_PACKET
+    )
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn escape_cancels_even_with_modifiers_or_extended() {
+        assert_eq!(
+            CaptureDecision::Cancel,
+            classify_capture(0x1B, false, false)
+        );
+        assert_eq!(CaptureDecision::Cancel, classify_capture(0x1B, true, true));
+    }
+
+    #[test]
+    fn modifier_and_system_keys_are_flagged() {
+        for vk in [
+            0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 0x5D, 0x15, 0x19,
+            0x1C, 0x1D, 0x1E, 0x1F, 0xE5,
+        ] {
+            assert!(is_modifier_or_system_key(vk), "0x{vk:02X}");
+            assert_eq!(
+                CaptureDecision::ModifierOrSystem,
+                classify_capture(vk, false, false),
+                "0x{vk:02X}"
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_keys_and_escape_are_not_modifier_or_system() {
+        for vk in [0x14, 0x41, 0x91, 0x1B, 0x70] {
+            assert!(!is_modifier_or_system_key(vk), "0x{vk:02X}");
+        }
+    }
+
+    #[test]
+    fn held_modifiers_reject_an_otherwise_valid_key() {
+        assert_eq!(
+            CaptureDecision::ModifierOrSystem,
+            classify_capture(0x41, false, true)
+        );
+    }
+
+    #[test]
+    fn modifier_check_precedes_extended_check() {
+        // Right Ctrl/Alt arrive extended; they must get the modifier hint.
+        assert_eq!(
+            CaptureDecision::ModifierOrSystem,
+            classify_capture(0xA3, true, false)
+        );
+    }
+
+    #[test]
+    fn extended_keys_are_unsupported_even_when_the_vk_is_allowlisted() {
+        // Numpad Enter shares VK_RETURN with main Enter.
+        assert_eq!(
+            CaptureDecision::Unsupported,
+            classify_capture(0x0D, true, false)
+        );
+        assert_eq!(
+            CaptureDecision::Unsupported,
+            classify_capture(0x26, true, false)
+        );
+    }
+
+    #[test]
+    fn allowlisted_keys_are_accepted() {
+        assert_eq!(
+            CaptureDecision::Accept(TriggerKey::CAPS_LOCK),
+            classify_capture(0x14, false, false)
+        );
+        assert_eq!(
+            CaptureDecision::Accept(TriggerKey::SCROLL_LOCK),
+            classify_capture(0x91, false, false)
+        );
+        assert_eq!(
+            CaptureDecision::Accept(TriggerKey::try_create(0x0D).unwrap()),
+            classify_capture(0x0D, false, false)
+        );
+    }
+
+    #[test]
+    fn keys_outside_the_allowlist_are_unsupported() {
+        // Arrow up without the extended flag, media key, Delete.
+        for vk in [0x26, 0xAF, 0x2E, 0x00] {
+            assert_eq!(
+                CaptureDecision::Unsupported,
+                classify_capture(vk, false, false),
+                "0x{vk:02X}"
+            );
+        }
+    }
+}

@@ -84,9 +84,9 @@ The window should be compact enough to feel like a utility, but the content area
 
 ## Native platform choice
 
-Decided 2026-10-29: use Rust with iced for the settings window, and the `windows` crate for Win32 interop. The code is a Cargo workspace at the repository root: `crates/hyperkey-core`, `crates/hyperkey-input`, and `crates/hyperkey-app`. This supersedes the earlier C# with WPF and WPF UI decision; that implementation shipped through 0.1.1 and has been removed.
+Decided 2026-10-29 and revised 2026-11-09: use Rust with GPUI (Zed's UI framework, upstream `gpui` without a component library) for the settings window, replacing iced, and the `windows` crate for Win32 interop. The code is a Cargo workspace at the repository root: `crates/hyperkey-core`, `crates/hyperkey-input`, and `crates/hyperkey-app`. This supersedes the earlier C# with WPF and WPF UI decision; that implementation shipped through 0.1.1 and has been removed.
 
-Iced owns the settings window theme, layout, and controls. Win32 interop owns the parts a UI toolkit does not:
+GPUI owns the settings window theme, layout, focus order, and controls. Win32 interop owns the parts a UI toolkit does not:
 
 - Low-level keyboard hooks.
 - Synthesized keyboard events.
@@ -94,7 +94,7 @@ Iced owns the settings window theme, layout, and controls. Win32 interop owns th
 - A dedicated hook thread with its own message loop.
 - Startup integration, the single-instance guard, and process-level lifecycle work.
 
-Accepted trade-off: iced does not expose a UI Automation tree, so the settings window is not screen-reader operable in this version. The WPF implementation was. Keyboard operation and a logical focus order remain requirements. Revisit this decision if the toolkit gains UI Automation support.
+Accepted trade-off: GPUI does not expose a UI Automation tree, so the settings window is not screen-reader operable in this version. The WPF implementation was. Keyboard operation and a logical focus order remain requirements. Revisit this decision if the toolkit gains UI Automation support.
 
 ## Application shape
 
@@ -102,10 +102,13 @@ The app should run as one background process with a settings window that opens o
 
 ```text
 crates/hyperkey-app
-├── App lifetime and single-instance handling
-├── Tray icon and tray menu
-├── Settings window
-└── Settings persistence
+├── main: single-instance check and startup flags
+├── app: event channel, settings window lifecycle
+├── controller: toolkit-free state and operations
+├── copy: user-facing text
+├── ui: theme tokens, components, settings window (GPUI)
+├── platform: tray, startup, clipboard, session window, window visibility
+└── settings_store: persistence
 
 crates/hyperkey-input
 ├── Low-level keyboard hook
@@ -216,11 +219,12 @@ Settings writes should be atomic enough that a process termination cannot leave 
 The settings window should:
 
 - Open from the tray icon.
-- Open at 760x540 centered on screen, resizable down to 720x500. Window geometry is not persisted; there are no size or position fields in the settings model.
+- Open at 560x700 centered on screen, resizable down to 480x520. Window geometry is not persisted; there are no size or position fields in the settings model.
 - Follow the system light and dark mode.
 - Keep a clear enabled or disabled state at the top.
 - Offer compact controls for the trigger key and output modifier combination.
-- Use toolkit controls (toggler, checkbox, button, pick list) with keycap-style styling. Toggles must stay keyboard operable. Screen-reader operation is not a requirement under the iced decision above. Layout is dividers and whitespace rather than cards or list rows.
+- Use custom GPUI controls (switch, chip toggles, buttons, a keycap-style trigger button) grouped into captioned section cards. Every control is a tab stop with a visible accent focus ring, and Enter or Space activates it. Screen-reader operation is not a requirement under the GPUI decision above.
+- Hide instead of closing: GPUI quits when its last window is destroyed, so closing the window hides it and the tray reopens it.
 - Scroll as the list grows.
 - Have keyboard-accessible focus order.
 - Avoid tab navigation, a sidebar, or hidden settings pages.
