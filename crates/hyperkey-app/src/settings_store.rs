@@ -13,6 +13,21 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Names a directory that replaces the per-user settings directory for a
+/// development build. It also turns off startup registration.
+const ISOLATION_ENV: &str = "HYPERKEY_SETTINGS_DIR";
+
+/// True when the dev-isolation variable is set: the app then touches neither
+/// the real settings directory nor the startup registry entry.
+pub fn is_isolated() -> bool {
+    isolated_dir().is_some()
+}
+
+/// The `HYPERKEY_SETTINGS_DIR` value; an empty value counts as unset.
+fn isolated_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os(ISOLATION_ENV).filter(|directory| !directory.is_empty())
+}
+
 pub struct SettingsLoadResult {
     pub settings: HyperkeySettings,
     /// Banner text for the settings window: the fatal error and quarantine
@@ -28,12 +43,17 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    /// The per-user store, or the `HYPERKEY_SETTINGS_DIR` directory when that
+    /// variable is set (see `is_isolated`).
     pub fn new() -> Self {
-        Self::at(
-            dirs::data_local_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("Hyperkey"),
-        )
+        match isolated_dir() {
+            Some(directory) => Self::at(directory),
+            None => Self::at(
+                dirs::data_local_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("Hyperkey"),
+            ),
+        }
     }
 
     /// Builds a store rooted at an explicit directory. `new` uses the real

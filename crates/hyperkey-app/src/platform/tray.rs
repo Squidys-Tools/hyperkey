@@ -16,7 +16,7 @@ const MUTED: [u8; 4] = [0x8A, 0x8A, 0x8A, 0xFF];
 const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 
 /// The hidden window behind the tray icon must live on the UI thread, so this
-/// is created from the daemon's boot function.
+/// is created on the GPUI main thread, whose message loop services it.
 pub struct Tray {
     icon: TrayIcon,
     toggle_item: CheckMenuItem,
@@ -74,8 +74,8 @@ fn toggle_text(enabled: bool) -> &'static str {
     if enabled { "Hyperkey: On" } else { "Hyperkey: Off" }
 }
 
-/// The 32x32 RGBA icon bitmap, also used for the settings window icon.
-pub fn icon_rgba(running: bool) -> Vec<u8> {
+/// The 32x32 RGBA icon bitmap.
+fn icon_rgba(running: bool) -> Vec<u8> {
     const SIZE: usize = 32;
     let fill = if running { ACCENT } else { MUTED };
 

@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 hyperkey-core = { path = "../hyperkey-core" }
 hyperkey-input = { path = "../hyperkey-input" }
-iced = "=0.14.0"
+gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
+futures = "0.3"
+raw-window-handle = "0.6"
 tray-icon = "=0.26.1"
 dirs = "7"
 windows = { version = "0.62", features = [

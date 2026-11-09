@@ -12,7 +12,7 @@ Hyperkey is a Windows-only Rust app. Commands below are PowerShell, run from the
   `[workspace.package]` `version` here.
 - `crates\hyperkey-core` — pure settings and trigger logic; no Win32 or UI dependencies.
 - `crates\hyperkey-input` — keyboard hook thread, SendInput synthesis, watchdog.
-- `crates\hyperkey-app` — iced settings window, tray, startup, single instance.
+- `crates\hyperkey-app` — GPUI settings window, controller, tray, startup, single instance.
 - `installer\` — Inno Setup script.
 - `scripts\` — installer packaging and verification.
 - `docs\` — design documents.
@@ -24,6 +24,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build -p hyperkey-app --release
 ```
+
+To run a dev build safely, set `HYPERKEY_SETTINGS_DIR` to a scratch directory: settings are read and
+written there and the startup registry entry is never touched.
 
 ## Working rules
 

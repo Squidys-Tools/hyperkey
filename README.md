@@ -55,4 +55,4 @@ Uninstall Hyperkey from Windows Settings, "Apps", "Installed apps". This removes
 
 ## Development
 
-Hyperkey is a Rust app: the settings window uses iced and Win32 interop goes through the `windows` crate. It is free and open source. If you want to build it yourself or help out, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Hyperkey is a Rust app: the settings window uses GPUI and Win32 interop goes through the `windows` crate. It is free and open source. If you want to build it yourself or help out, see [CONTRIBUTING.md](CONTRIBUTING.md).
