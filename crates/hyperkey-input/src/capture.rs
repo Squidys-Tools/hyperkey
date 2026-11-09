@@ -24,13 +24,16 @@ use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId,
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
-    HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, PM_NOREMOVE, PeekMessageW, PostQuitMessage,
+    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// How long `KeyCapture::start` waits for the hook thread to install its hook.
 const START_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Posted by `Drop`: stop capturing, then exit once every swallowed key is up.
+const WM_CAPTURE_RELEASE: u32 = WM_APP + 1;
 
 const VK_SHIFT: u16 = 0x10;
 const VK_CONTROL: u16 = 0x11;
@@ -47,14 +50,15 @@ const VK_MASK_KEY: u16 = 0xE8;
 pub struct CapturedKey {
     /// The virtual key the engine's hook would see for this press.
     pub virtual_key: u16,
-    pub scan_code: u16,
     /// The hook's extended-key flag (arrows, right Ctrl/Alt, numpad Enter, ...).
     pub extended: bool,
     /// Shift, Ctrl, Alt, or Win was already down when this key went down.
     pub modifiers_held: bool,
 }
 
-/// A live capture. Dropping it unhooks and stops the capture thread.
+/// A live capture. Dropping it stops capturing at once; the hook stays only
+/// until the keys it swallowed are released, so their key-ups never reach the
+/// window (a captured Space or Enter would otherwise click the focused button).
 pub struct KeyCapture {
     thread_id: u32,
     thread: Option<JoinHandle<()>>,
@@ -109,10 +113,13 @@ impl Drop for KeyCapture {
             return;
         };
 
-        let posted = post_quit(self.thread_id);
-        // Joining without a delivered WM_QUIT would wait forever on a live
-        // message loop; a thread that already exited joins immediately.
-        if posted || thread.is_finished() {
+        // The thread exits on its own once the swallowed keys are up, so it is
+        // not joined here; one that already exited joins immediately.
+        // SAFETY: FFI call; posts a plain message to the capture thread's queue.
+        let posted =
+            unsafe { PostThreadMessageW(self.thread_id, WM_CAPTURE_RELEASE, WPARAM(0), LPARAM(0)) }
+                .is_ok();
+        if !posted || thread.is_finished() {
             let _ = thread.join();
         }
     }
@@ -152,6 +159,10 @@ impl HeldKeys {
         if let Some(slot) = self.0.get_mut(virtual_key as usize) {
             *slot = down;
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.0.contains(&true)
     }
 
     fn any_modifier(&self) -> bool {
@@ -229,6 +240,8 @@ struct CaptureContext {
     hook: HHOOK,
     on_key: Rc<dyn Fn(CapturedKey)>,
     held: HeldKeys,
+    /// Capture ended; only key-ups of `held` keys are still swallowed.
+    releasing: bool,
 }
 
 thread_local! {
@@ -262,6 +275,7 @@ fn capture_thread_main(
             hook,
             on_key,
             held: HeldKeys::new(),
+            releasing: false,
         });
     });
 
@@ -284,6 +298,18 @@ fn capture_thread_main(
         let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
         if result.0 <= 0 {
             break;
+        }
+        if message.message == WM_CAPTURE_RELEASE {
+            let done = CAPTURE_CONTEXT.with(|cell| {
+                cell.borrow_mut().as_mut().is_none_or(|context| {
+                    context.releasing = true;
+                    context.held.is_empty()
+                })
+            });
+            if done {
+                break;
+            }
+            continue;
         }
 
         // SAFETY: FFI calls on the message this thread just retrieved.
@@ -369,6 +395,11 @@ unsafe extern "system" fn hook_callback(code: i32, wparam: WPARAM, lparam: LPARA
             let Some(context) = cell.as_mut() else {
                 return (CaptureAction::Pass, None, None);
             };
+            let fresh_press =
+                transition == KeyTransition::Down && !context.held.contains(virtual_key);
+            if context.releasing && fresh_press {
+                return (CaptureAction::Pass, None, None);
+            }
             let (action, report) = decide(
                 transition,
                 virtual_key,
@@ -378,6 +409,10 @@ unsafe extern "system" fn hook_callback(code: i32, wparam: WPARAM, lparam: LPARA
                 modifiers_down_async,
                 &mut context.held,
             );
+            if context.releasing && context.held.is_empty() {
+                // SAFETY: FFI call on this (the capture) thread; ends its pump.
+                unsafe { PostQuitMessage(0) };
+            }
             (action, report, Some(Rc::clone(&context.on_key)))
         });
 
@@ -385,7 +420,6 @@ unsafe extern "system" fn hook_callback(code: i32, wparam: WPARAM, lparam: LPARA
         if let (Some(report), Some(on_key)) = (report, on_key) {
             on_key(CapturedKey {
                 virtual_key,
-                scan_code: native.scanCode as u16,
                 extended,
                 modifiers_held: report.modifiers_held,
             });

@@ -48,9 +48,9 @@
 //! trigger rebinding in the settings window:
 //!
 //! ```text
-//! struct CapturedKey { virtual_key: u16, scan_code: u16, extended: bool, modifiers_held: bool }
+//! struct CapturedKey { virtual_key: u16, extended: bool, modifiers_held: bool }
 //! KeyCapture::start(on_key: impl Fn(CapturedKey) + Send + 'static) -> Result<KeyCapture, String>
-//! impl Drop for KeyCapture             // posts WM_QUIT, unhooks, joins
+//! impl Drop for KeyCapture             // stops capturing; unhooks once swallowed keys are up
 //! ```
 //!
 //! - `start` spawns a "Hyperkey key capture" thread with its own

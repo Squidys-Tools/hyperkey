@@ -95,8 +95,10 @@ impl SettingsWindow {
         }
     }
 
-    /// Shows the hidden window again with focus back on the root.
-    pub fn reveal(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    /// Shows the hidden window again with focus back on the root. A capture
+    /// still running is cancelled first: activation sends a synthetic Alt tap.
+    pub fn reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.act(cx, Controller::cancel_capture);
         platform::window::show(&*window);
         window.activate_window();
         window.focus(&self.focus.root);

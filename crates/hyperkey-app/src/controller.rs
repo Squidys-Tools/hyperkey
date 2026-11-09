@@ -481,7 +481,6 @@ mod tests {
     fn key(virtual_key: u16, extended: bool, modifiers_held: bool) -> CapturedKey {
         CapturedKey {
             virtual_key,
-            scan_code: 0,
             extended,
             modifiers_held,
         }

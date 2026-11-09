@@ -20,7 +20,12 @@ const ISOLATION_ENV: &str = "HYPERKEY_SETTINGS_DIR";
 /// True when the dev-isolation variable is set: the app then touches neither
 /// the real settings directory nor the startup registry entry.
 pub fn is_isolated() -> bool {
-    std::env::var_os(ISOLATION_ENV).is_some()
+    isolated_dir().is_some()
+}
+
+/// The `HYPERKEY_SETTINGS_DIR` value; an empty value counts as unset.
+fn isolated_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os(ISOLATION_ENV).filter(|directory| !directory.is_empty())
 }
 
 pub struct SettingsLoadResult {
@@ -41,7 +46,7 @@ impl SettingsStore {
     /// The per-user store, or the `HYPERKEY_SETTINGS_DIR` directory when that
     /// variable is set (see `is_isolated`).
     pub fn new() -> Self {
-        match std::env::var_os(ISOLATION_ENV) {
+        match isolated_dir() {
             Some(directory) => Self::at(directory),
             None => Self::at(
                 dirs::data_local_dir()
