@@ -16,11 +16,20 @@ pub enum KeyTransition {
     Up,
 }
 
+/// One key event as the low-level hook reports it. `scan_code`, `extended`,
+/// and `time_ms` come from `KBDLLHOOKSTRUCT` (`scanCode`, `LLKHF_EXTENDED`,
+/// and the `time` tick); the machine uses `time_ms` for its tap and hold
+/// timeouts, and the engine replays buffered keys from the scan code.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct KeyboardEvent {
     pub key: VirtualKey,
     pub transition: KeyTransition,
     pub is_synthetic: bool,
+    pub scan_code: u16,
+    pub extended: bool,
+    /// Milliseconds on the system tick clock (`GetTickCount`); wraps every
+    /// ~49.7 days, so durations are always computed with `wrapping_sub`.
+    pub time_ms: u32,
 }
 
 impl KeyboardEvent {
@@ -29,14 +38,30 @@ impl KeyboardEvent {
             key,
             transition,
             is_synthetic: false,
+            scan_code: 0,
+            extended: false,
+            time_ms: 0,
         }
     }
 
     pub fn synthetic(key: VirtualKey, transition: KeyTransition) -> Self {
         Self {
-            key,
-            transition,
             is_synthetic: true,
+            ..Self::new(key, transition)
+        }
+    }
+
+    /// The same event stamped at `time_ms` on the tick clock.
+    pub fn at(self, time_ms: u32) -> Self {
+        Self { time_ms, ..self }
+    }
+
+    /// The same event carrying a hardware scan code and extended flag.
+    pub fn with_scan_code(self, scan_code: u16, extended: bool) -> Self {
+        Self {
+            scan_code,
+            extended,
+            ..self
         }
     }
 }
@@ -196,6 +221,24 @@ impl TriggerKey {
         }
     }
 
+    /// True for keys that produce text while typing: letters, digits,
+    /// Space, OEM punctuation, numpad keys, Tab, Enter, and Backspace. A
+    /// typing-key trigger is undecided while held (see the machine's
+    /// permissive hold), so fast typing that rolls over the trigger still
+    /// produces text. Lock keys and function keys are not typing keys and
+    /// activate the layer immediately.
+    pub fn is_typing_key(self) -> bool {
+        matches!(
+            self.0,
+            0x08 | 0x09 | 0x0D | 0x20
+                | 0x30..=0x39
+                | 0x41..=0x5A
+                | 0x60..=0x6F
+                | 0xBA..=0xC0
+                | 0xDB..=0xDF
+        )
+    }
+
     pub fn is_supported_key(virtual_key_code: u16) -> bool {
         find_known(virtual_key_code).is_some()
     }
@@ -258,6 +301,13 @@ pub fn classify_capture(virtual_key: u16, extended: bool, modifiers_held: bool) 
         Some(key) => CaptureDecision::Accept(key),
         None => CaptureDecision::Unsupported,
     }
+}
+
+/// Shift, Ctrl, Alt, and Win, generic or either side. The trigger machine
+/// passes these through without changing phase, so the user's real modifiers
+/// combine with the generated layer instead of activating it.
+pub fn is_modifier_key(virtual_key: u16) -> bool {
+    matches!(virtual_key, 0x10 | 0x11 | 0x12 | 0x5B | 0x5C | 0xA0..=0xA5)
 }
 
 /// Modifier, OS, and IME-side virtual keys that can never be the trigger.
@@ -383,5 +433,82 @@ mod capture_tests {
                 "0x{vk:02X}"
             );
         }
+    }
+}
+
+/// A modifier in a chord as the system saw it: the generated output
+/// modifiers plus any the user physically holds. Ordered for display.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub enum ChordModifier {
+    Win,
+    Control,
+    Alt,
+    Shift,
+}
+
+impl ChordModifier {
+    /// The modifier a Shift, Ctrl, Alt, or Win virtual key (generic or
+    /// either side) stands for.
+    pub fn of_virtual_key(virtual_key: u16) -> Option<Self> {
+        match virtual_key {
+            0x5B | 0x5C => Some(Self::Win),
+            0x11 | 0xA2 | 0xA3 => Some(Self::Control),
+            0x12 | 0xA4 | 0xA5 => Some(Self::Alt),
+            0x10 | 0xA0 | 0xA1 => Some(Self::Shift),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::settings::OutputModifier> for ChordModifier {
+    fn from(modifier: crate::settings::OutputModifier) -> Self {
+        use crate::settings::OutputModifier;
+        match modifier {
+            OutputModifier::Control => Self::Control,
+            OutputModifier::Alt => Self::Alt,
+            OutputModifier::Shift => Self::Shift,
+        }
+    }
+}
+
+/// The physical modifier keys delivered to the system as held, tracked per
+/// virtual key so releasing one side keeps the other side's modifier.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct HeldModifiers {
+    keys: Vec<VirtualKey>,
+}
+
+impl HeldModifiers {
+    /// Records a delivered key event; non-modifier keys are ignored.
+    pub fn apply(&mut self, key: VirtualKey, transition: KeyTransition) {
+        if ChordModifier::of_virtual_key(key.0).is_none() {
+            return;
+        }
+        match transition {
+            KeyTransition::Down if !self.keys.contains(&key) => self.keys.push(key),
+            KeyTransition::Down => {}
+            KeyTransition::Up => self.keys.retain(|held| *held != key),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.keys.clear();
+    }
+
+    /// The chord's modifiers: `generated` plus everything held, each once,
+    /// in Win, Ctrl, Alt, Shift order.
+    pub fn chord_with(&self, generated: &[crate::settings::OutputModifier]) -> Vec<ChordModifier> {
+        let mut modifiers: Vec<ChordModifier> = generated
+            .iter()
+            .map(|modifier| ChordModifier::from(*modifier))
+            .chain(
+                self.keys
+                    .iter()
+                    .filter_map(|key| ChordModifier::of_virtual_key(key.0)),
+            )
+            .collect();
+        modifiers.sort();
+        modifiers.dedup();
+        modifiers
     }
 }

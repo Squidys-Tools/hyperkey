@@ -56,12 +56,9 @@ fn unversioned_document_missing_newer_fields_still_migrates() {
     assert!(!result.used_defaults);
     assert!(!result.repaired);
     assert_eq!(TriggerKey::SCROLL_LOCK, result.settings.trigger());
-    assert_eq!(
-        &[OutputModifier::Alt],
-        result.settings.output_modifiers()
-    );
+    assert_eq!(&[OutputModifier::Alt], result.settings.output_modifiers());
     assert!(!result.settings.launch_to_tray());
-    assert_eq!(TapBehavior::CapsLock, result.settings.tap_behavior());
+    assert_eq!(TapBehavior::SendTrigger, result.settings.tap_behavior());
 }
 
 #[test]
@@ -88,10 +85,7 @@ fn invalid_trigger_resets_to_default_and_preserves_other_values() {
     );
     assert!(!result.settings.enabled());
     assert!(result.settings.launch_to_tray());
-    assert_eq!(
-        &[OutputModifier::Alt],
-        result.settings.output_modifiers()
-    );
+    assert_eq!(&[OutputModifier::Alt], result.settings.output_modifiers());
 }
 
 #[test]
@@ -145,12 +139,12 @@ fn unknown_tap_behavior_resets_to_caps_lock() {
     let unknown = json::parse(&TEMPLATE.replace("TAPBEHAVIOR", "\"Invert\""));
     assert!(!unknown.used_defaults);
     assert!(unknown.repaired);
-    assert_eq!(TapBehavior::CapsLock, unknown.settings.tap_behavior());
+    assert_eq!(TapBehavior::SendTrigger, unknown.settings.tap_behavior());
 
     let legacy = json::parse(&TEMPLATE.replace("TAPBEHAVIOR", "\"Undecided\""));
     assert!(!legacy.used_defaults);
     assert!(!legacy.repaired);
-    assert_eq!(TapBehavior::CapsLock, legacy.settings.tap_behavior());
+    assert_eq!(TapBehavior::SendTrigger, legacy.settings.tap_behavior());
 }
 
 #[test]
@@ -230,7 +224,10 @@ fn empty_document_repairs_every_required_field() {
     assert_eq!(HyperkeySettings::defaults(), result.settings);
     for expected in ["enabled", "launchAtStartup", "trigger", "output modifiers"] {
         assert!(
-            result.repairs.iter().any(|repair| repair.contains(expected)),
+            result
+                .repairs
+                .iter()
+                .any(|repair| repair.contains(expected)),
             "Expected a repair mentioning {expected}."
         );
     }

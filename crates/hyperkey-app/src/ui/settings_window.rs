@@ -3,7 +3,7 @@ use super::components::{
     Banner, Button, ButtonKind, ChipToggle, KeycapButton, SectionCard, SettingRow, StatusBadge,
     Switch, status_dot,
 };
-use super::theme::{FONT, Theme, space};
+use super::theme::{CONTROL_RADIUS, FONT, Theme, space};
 use crate::controller::Controller;
 use crate::copy::{self, Badge};
 use crate::platform;
@@ -11,7 +11,7 @@ use gpui::{
     App, ClickEvent, Context, Entity, FocusHandle, FontWeight, Hsla, IntoElement, Render,
     Subscription, Window, actions, div, prelude::*, px,
 };
-use hyperkey_core::settings::OutputModifier;
+use hyperkey_core::settings::{OutputModifier, TapBehavior};
 use hyperkey_input::engine::InputEngineStatus;
 
 actions!(hyperkey, [FocusNext, FocusPrev]);
@@ -24,6 +24,9 @@ struct Focus {
     control: FocusHandle,
     alt: FocusHandle,
     shift: FocusHandle,
+    tap_trigger: FocusHandle,
+    tap_escape: FocusHandle,
+    tap_nothing: FocusHandle,
     startup: FocusHandle,
     tray: FocusHandle,
     restart: FocusHandle,
@@ -44,6 +47,9 @@ impl Focus {
             control: stop(),
             alt: stop(),
             shift: stop(),
+            tap_trigger: stop(),
+            tap_escape: stop(),
+            tap_nothing: stop(),
             startup: stop(),
             tray: stop(),
             restart: stop(),
@@ -176,11 +182,15 @@ impl SettingsWindow {
     fn keyboard_card(&self, theme: Theme, cx: &Context<Self>) -> impl IntoElement {
         let controller = self.controller.read(cx);
         let capturing = controller.is_capturing();
+        let trigger = controller.settings().trigger();
+        let trigger_label = trigger.display_label().to_string();
         let key_label = if capturing {
             "Press a key…".to_string()
         } else {
-            controller.settings().trigger().display_label().to_string()
+            trigger_label.clone()
         };
+        let trigger_description = controller.trigger_description();
+        let tap_behavior = controller.settings().tap_behavior();
 
         let chip = |id: &'static str, modifier: OutputModifier, focus: &FocusHandle| {
             ChipToggle::new(
@@ -196,8 +206,20 @@ impl SettingsWindow {
             )
         };
 
+        let tap_chip =
+            |id: &'static str, label: String, behavior: TapBehavior, focus: &FocusHandle| {
+                ChipToggle::new(
+                    id,
+                    theme,
+                    label,
+                    tap_behavior == behavior,
+                    focus,
+                    Self::on_click(cx, move |controller| controller.set_tap_behavior(behavior)),
+                )
+            };
+
         let trigger_row = SettingRow::new(theme, "Trigger key")
-            .description(controller.trigger_hint().to_string())
+            .description(trigger_description)
             .when(capturing, |row| row.description_color(theme.accent))
             .trailing(KeycapButton::new(
                 "trigger",
@@ -219,9 +241,62 @@ impl SettingsWindow {
                     .child(chip("shift", OutputModifier::Shift, &self.focus.shift)),
             );
 
+        let tap_row = SettingRow::new(theme, copy::TAP_ROW_TITLE)
+            .description(copy::TAP_BEHAVIOR_HINT)
+            .trailing(
+                div()
+                    .flex()
+                    .gap(space::SM)
+                    .child(tap_chip(
+                        "tap-trigger",
+                        trigger_label.clone(),
+                        TapBehavior::SendTrigger,
+                        &self.focus.tap_trigger,
+                    ))
+                    .child(tap_chip(
+                        "tap-escape",
+                        copy::TAP_ESCAPE_LABEL.to_string(),
+                        TapBehavior::Escape,
+                        &self.focus.tap_escape,
+                    ))
+                    .child(tap_chip(
+                        "tap-nothing",
+                        copy::TAP_NOTHING_LABEL.to_string(),
+                        TapBehavior::Nothing,
+                        &self.focus.tap_nothing,
+                    )),
+            );
+
+        let chord = match controller.last_chord() {
+            Some(chord) => div()
+                .min_w(px(112.0))
+                .h(px(34.0))
+                .px(space::LG)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(CONTROL_RADIUS)
+                .border_1()
+                .border_b_2()
+                .border_color(theme.hairline)
+                .bg(theme.control)
+                .font_weight(FontWeight::SEMIBOLD)
+                .whitespace_nowrap()
+                .child(chord.to_string()),
+            None => div()
+                .text_color(theme.secondary)
+                .child(copy::TRY_IT_WAITING),
+        };
+
+        let try_row = SettingRow::new(theme, copy::TRY_IT_TITLE)
+            .description(copy::try_it_hint(&trigger_label))
+            .trailing(chord);
+
         SectionCard::new(theme, "Keyboard")
             .child(trigger_row)
             .child(modifiers_row)
+            .child(tap_row)
+            .child(try_row)
     }
 
     fn startup_card(&self, theme: Theme, cx: &Context<Self>) -> impl IntoElement {

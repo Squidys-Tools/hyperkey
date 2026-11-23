@@ -28,8 +28,11 @@ Requires Windows 10 version 19041 or newer.
 Settings live in one window, opened from the tray icon:
 
 - **Enabled** turns the whole thing on or off without quitting.
-- **Trigger key** rebinds to any normal key: select Rebind, then press the key. Modifier, system, and extended keys (arrows, Home/End, media keys, …) are rejected, and Escape cancels rebinding. Tapping the trigger on its own still types it like normal.
+- **Trigger key** rebinds to any normal key: select Rebind, then press the key. Modifier, system, and extended keys (arrows, Home/End, media keys, …) are rejected, and Escape cancels rebinding. By default, tapping the trigger on its own still types it like normal (see **When tapped**).
 - **Output modifiers** picks which of Ctrl, Alt, or Shift the layer sends. Pick at least one.
+- **When tapped** picks what a quick tap of the trigger does: type the trigger key itself (the default; for Caps Lock that toggles caps), send Escape, or do nothing. Holding the trigger longer than half a second and releasing it without pressing another key sends nothing.
+- **Typing-safe triggers.** When the trigger is a typing key (Space, a letter, a digit, punctuation, Tab, Enter, Backspace, or a numpad key), fast typing that rolls over the trigger still types normally. A key counts as a shortcut only after you press and release it while holding the trigger, or once the trigger has been held for 200 ms.
+- **Try it** shows the last shortcut the layer produced, such as `Ctrl + Alt + Shift + F` (including any Shift, Ctrl, Alt, or Win key you held yourself), so you can check the layer without opening another app.
 - **Launch at login** starts Hyperkey when you sign in. **Launch to tray** keeps the settings window closed at startup.
 
 Settings are saved under `%LOCALAPPDATA%\Hyperkey\settings.json` and survive restarts.

@@ -5,10 +5,10 @@
 //! The app crate drives the engine through this surface:
 //!
 //! ```text
-//! InputEngine::new(trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>) -> InputEngine
+//! InputEngine::new(trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>, tap_behavior: TapBehavior) -> InputEngine
 //! InputEngine::start(&self) -> bool
 //! InputEngine::stop(&self)
-//! InputEngine::configure(&self, trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>)
+//! InputEngine::configure(&self, trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>, tap_behavior: TapBehavior)
 //! InputEngine::emergency_disable(&self)
 //! InputEngine::reconcile(&self)
 //! InputEngine::restart_hook(&self) -> bool
@@ -24,8 +24,11 @@
 //!   Windows silently removes it. Returns false unless the hook ends up
 //!   `Running`.
 //! - `stop` tears down the watchdog and the hook thread.
-//! - `configure` swaps the trigger key and output modifiers at runtime; it
-//!   releases any held generated modifiers first.
+//! - `configure` swaps the trigger key, output modifiers, and tap behavior at
+//!   runtime; it releases any held generated modifiers, drops buffered keys,
+//!   and disarms the hold timer first.
+//! - Typing-key triggers use a permissive hold (see `hyperkey_core::machine`)
+//!   whose timeout runs as a thread timer on the hook thread.
 //! - `emergency_disable` resets the trigger machine and releases generated
 //!   modifiers without persisting a disabled state.
 //! - `reconcile` is the phase-3 recovery hook: identical reset, called by the
@@ -36,11 +39,16 @@
 //!   state; a hook install or reinstall failure surfaces as
 //!   `InputEngineStatus::Failed` with the reason in `status_error`.
 //! - `subscribe` returns a channel receiver for every status transition
-//!   (`EngineEvent::StatusChanged`) and every automatic hook recovery
-//!   (`EngineEvent::HookRecovered`).
+//!   (`EngineEvent::StatusChanged`), every automatic hook recovery
+//!   (`EngineEvent::HookRecovered`), and every non-modifier key-down delivered
+//!   under the active layer (`EngineEvent::LayerChord`).
 //!
 //! `synth::ModifierSynthesizer` sends the generated modifier layer, trigger
-//! tap replays, and watchdog liveness probes through `SendInput`.
+//! tap replays, Escape taps, buffered-key replays, and watchdog liveness
+//! probes through `SendInput`.
+//!
+//! `key_label(virtual_key: u16, scan_code: u16, extended: bool) -> String`
+//! names a key for display (layout-aware via `GetKeyNameTextW`).
 //!
 //! # Key capture (`capture::KeyCapture`)
 //!
@@ -67,4 +75,7 @@
 
 pub mod capture;
 pub mod engine;
+mod labels;
 pub mod synth;
+
+pub use labels::key_label;

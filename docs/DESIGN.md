@@ -35,7 +35,17 @@ Not included:
 - A scripting language or user-defined automation rules.
 - Tabs or sidebar navigation in settings.
 
-Tap behavior is defined as normal trigger-key input. The hook suppresses the physical tap while it decides whether the key is held, then replays a tagged trigger-key down/up pair for a tap so Windows still updates the selected lock key normally.
+- A tap action for the trigger: replay the trigger key (the default), send Escape, or do nothing.
+- Typing-safe triggers: typing keys used as the trigger decide between tap and hold without
+  breaking fast typing (see the state machine below).
+- A live "Try it" readout of the last chord the layer delivered.
+
+The hook suppresses the physical trigger while it decides whether the key is held. A tap then runs
+the selected tap action: `SendTrigger` replays a tagged trigger-key down/up pair so Windows still
+updates the selected lock key normally, `Escape` sends a tagged Escape down/up, and `Nothing` sends
+nothing. A trigger held alone for more than 500 ms (`TAP_TIMEOUT_MS`) and then released sends
+nothing: the user changed their mind about a chord. This is measured with the hook events' own
+millisecond timestamps, so it needs no timer.
 
 ## Product principles
 
@@ -60,7 +70,10 @@ Hyperkey
 
 Keyboard
   Trigger key: any supported key, rebound through the settings window
+    (typing keys add a one-line typing-safe note)
   Output: selected Ctrl / Alt / Shift modifiers
+  When tapped: <trigger> / Escape / Nothing
+  Try it: the last chord the layer delivered, or "Waiting…"
 
 Startup
   Launch at Login
@@ -148,21 +161,51 @@ Mark generated events with `dwExtraInfo` and ignore those marked events in the h
 ```text
 Idle
   Trigger key down
-    → TriggerHeld
+    → TriggerHeld (undecided; typing triggers arm a 200 ms hold timer)
 
-TriggerHeld
-  another key down
-    → HyperActive
+TriggerHeld, non-typing trigger
+  another non-modifier key down
+    → press modifiers, forward the key → HyperActive
+
+TriggerHeld, typing trigger (permissive hold)
+  non-modifier key down
+    → suppress and buffer it (at most 8; overflow resolves as hold)
+  modifier key down/up while keys are buffered
+    → suppress and buffer it too, so the replay keeps the original order
+  key up of a buffered key
+    → hold: press modifiers, replay buffered downs, then the up → HyperActive
+  trigger key up with keys buffered
+    → tap (rollover): run the tap action, replay buffered downs unmodified → Idle
+  200 ms (HOLD_TIMEOUT_MS) since the trigger down
+    → hold: with keys buffered, press modifiers and replay them → HyperActive;
+      with none, the next non-modifier key down goes straight to HyperActive
 
 HyperActive
   other key events
     → forward while the selected modifiers are held
 
 TriggerHeld or HyperActive
+  modifier key down/up (Shift, Ctrl, Alt, Win)
+    → pass through, phase unchanged (unless buffered, above)
+  trigger autorepeat down
+    → suppressed
   Trigger key up
-    → release generated modifiers
+    → release generated modifiers (or run the tap action from TriggerHeld,
+      unless held alone longer than 500 ms)
     → Idle
 ```
+
+The machine in `hyperkey-core` is pure: every event carries the hook's millisecond tick, a
+transition can ask for a deadline to be armed, and a separate timeout function resolves an expired
+hold. `hyperkey-input` arms that deadline as a hook-thread timer (`SetTimer`, dispatched by the
+hook thread's message pump) and kills it on resolve, reset, reconfigure, stop, and hook reinstall.
+An event stamped at or past the deadline runs the overdue timeout first, so a late `WM_TIMER`
+gives the same outcome as an on-time one. Buffered keys keep their virtual key, scan code, and
+extended flag and are replayed by virtual key (`VK_PACKET` Unicode input replays as the character);
+a reset delivers any buffered modifier events so the OS modifier state stays in step.
+Every non-modifier key the active layer delivers is published as `EngineEvent::LayerChord` for the
+live tester, with the generated modifiers plus any real Shift, Ctrl, Alt, or Win key the hook has
+delivered as held.
 
 The state machine must also recover when the normal release sequence is interrupted by sleep, lock, session changes, hook removal, or process shutdown.
 
@@ -191,20 +234,22 @@ Start with a versioned JSON file under the current user's local app data directo
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "enabled": true,
   "trigger": "CapsLock",
   "outputModifiers": ["Control", "Alt", "Shift"],
+  "tapBehavior": "Trigger",
   "launchAtStartup": true,
   "launchToTray": false
 }
 ```
 
 Schema 1 was the original fixed-trigger format and is still read on load. Schema 2 replaced it
-when the trigger became rebindable. `tapBehavior` still exists in schema 2 but is now vestigial:
-it only accepts `CapsLock`, and the legacy value `Undecided` is read as `CapsLock`. Because the
-trigger key replays itself on a tap by definition, the field no longer changes behavior and is kept
-only so existing settings files keep round-tripping. A future schema can drop it.
+when the trigger became rebindable. Schema 3 makes `tapBehavior` meaningful again: it is written as
+`Trigger`, `Escape`, or `Nothing`. It is read case-insensitively; `Trigger` and the legacy values
+`CapsLock` and `Undecided` mean replay the trigger, `None` is accepted for `Nothing`, a missing
+value defaults to `Trigger` silently, and any other value resets to `Trigger` with a repair
+message. Schema 1 and 2 files and unversioned files still load.
 
 The Rust implementation replaces stringly typed values with enums and dedicated types. Parse and validate persisted JSON at the boundary, then pass trusted settings into the core engine.
 

@@ -1,7 +1,12 @@
 use crate::synth::{ModifierSynthesizer, SYNTHETIC_INPUT_TAG, is_heartbeat_probe};
-use hyperkey_core::keys::{KeyTransition, KeyboardEvent, TriggerKey, VirtualKey};
-use hyperkey_core::machine::{self, InputDecision, TriggerMachineState};
-use hyperkey_core::settings::OutputModifier;
+use hyperkey_core::keys::{
+    ChordModifier, HeldModifiers, KeyTransition, KeyboardEvent, TriggerKey, VirtualKey,
+    is_modifier_key,
+};
+use hyperkey_core::machine::{
+    self, BufferedKey, InputDecision, MachineConfig, TriggerMachineState, TriggerPhase,
+};
+use hyperkey_core::settings::{OutputModifier, TapBehavior};
 use hyperkey_core::watchdog::{HookWatchdog, HookWatchdogAction};
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -10,14 +15,15 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount64};
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
-    PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, KillTimer,
+    LLKHF_EXTENDED, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetTimer,
+    SetWindowsHookExW, TranslateMessage, USER_TIMER_MINIMUM, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
 };
 
 /// Posted to the hook thread's queue when the hook needs reinstalling. Only
@@ -53,20 +59,47 @@ pub enum EngineEvent {
     /// The watchdog reinstalled a silently removed keyboard hook; `message`
     /// is a user-facing description of the automatic recovery.
     HookRecovered { message: String },
+    /// A non-modifier key-down was delivered (forwarded or replayed) while
+    /// the modifier layer was active, so the system saw `modifiers` + `key`:
+    /// the generated output modifiers plus any real modifier keys the user
+    /// was holding, in display order. Published from the hook thread; feeds
+    /// the live chord tester.
+    LayerChord {
+        modifiers: Vec<ChordModifier>,
+        key: VirtualKey,
+        scan_code: u16,
+        extended: bool,
+    },
 }
 
 /// State the hook callback and the control surface share. SendInput inside
 /// the callback delivers the injected events to this same callback before it
 /// returns, so the callback must never wait on `shared` for its own generated
-/// input — `dispatch_hook_event` handles that. Lock order: the callback takes
-/// `shared` and may briefly take `lifecycle` for status updates; nothing may
-/// hold `lifecycle` while acquiring `shared`, or the control and hook threads
-/// can deadlock.
+/// input — `dispatch_hook_event` handles that. Lock order: the callback and
+/// the hold timer take `shared` and may briefly take `lifecycle` for status
+/// updates and event publishing (`publish` only does a non-blocking mpsc
+/// send under it); nothing may hold `lifecycle` while acquiring `shared`, or
+/// the control and hook threads can deadlock.
 struct Shared {
     machine: TriggerMachineState,
     trigger: TriggerKey,
     output_modifiers: Vec<OutputModifier>,
+    tap_behavior: TapBehavior,
     synthesizer: ModifierSynthesizer,
+    /// Real modifier keys delivered to the system as held, for the chord
+    /// readout. Cleared on reset, when missed key-ups are likely.
+    held_modifiers: HeldModifiers,
+    /// The hook-thread timer armed for the machine's hold deadline. Thread
+    /// timers can only be killed on the hook thread, so a reset from another
+    /// thread just forgets the id; `timer_proc` kills any timer whose id no
+    /// longer matches when it fires.
+    timer: Option<ArmedTimer>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+struct ArmedTimer {
+    id: usize,
+    deadline_ms: u32,
 }
 
 struct Lifecycle {
@@ -138,14 +171,21 @@ pub struct InputEngine {
 }
 
 impl InputEngine {
-    pub fn new(trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>) -> Self {
+    pub fn new(
+        trigger_key: TriggerKey,
+        output_modifiers: Vec<OutputModifier>,
+        tap_behavior: TapBehavior,
+    ) -> Self {
         Self {
             inner: Arc::new(EngineInner {
                 shared: Mutex::new(Shared {
                     machine: TriggerMachineState::IDLE,
                     trigger: trigger_key,
                     output_modifiers,
+                    tap_behavior,
                     synthesizer: ModifierSynthesizer::new(),
+                    held_modifiers: HeldModifiers::default(),
+                    timer: None,
                 }),
                 lifecycle: Mutex::new(Lifecycle {
                     status: InputEngineStatus::Stopped,
@@ -165,17 +205,22 @@ impl InputEngine {
         }
     }
 
-    pub fn configure(&self, trigger_key: TriggerKey, output_modifiers: Vec<OutputModifier>) {
+    pub fn configure(
+        &self,
+        trigger_key: TriggerKey,
+        output_modifiers: Vec<OutputModifier>,
+        tap_behavior: TapBehavior,
+    ) {
         assert!(
             !self.disposed.load(Ordering::SeqCst),
             "InputEngine is disposed."
         );
 
         let mut shared = lock(&self.inner.shared);
-        shared.synthesizer.release_all(&shared.output_modifiers);
-        shared.machine = TriggerMachineState::IDLE;
+        reset_shared_locked(&self.inner, &mut shared);
         shared.trigger = trigger_key;
         shared.output_modifiers = output_modifiers;
+        shared.tap_behavior = tap_behavior;
     }
 
     pub fn status(&self) -> InputEngineStatus {
@@ -239,8 +284,7 @@ impl InputEngine {
             match spawned {
                 Ok(handle) => lifecycle.hook_thread = Some(handle),
                 Err(error) => {
-                    let message =
-                        format!("The keyboard hook thread could not be started. {error}");
+                    let message = format!("The keyboard hook thread could not be started. {error}");
                     set_status_locked(
                         &mut lifecycle,
                         InputEngineStatus::Failed,
@@ -300,17 +344,13 @@ impl InputEngine {
 
         if hook_thread_id != 0 {
             // SAFETY: FFI call; posts WM_QUIT to the hook thread's queue.
-            let posted = unsafe {
-                PostThreadMessageW(hook_thread_id, WM_QUIT, WPARAM(0), LPARAM(0))
-            };
+            let posted =
+                unsafe { PostThreadMessageW(hook_thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
             if posted.is_err() {
                 set_status(
                     &self.inner,
                     InputEngineStatus::Stopping,
-                    Some(
-                        "The keyboard hook shutdown message could not be posted."
-                            .to_string(),
-                    ),
+                    Some("The keyboard hook shutdown message could not be posted.".to_string()),
                 );
             }
         }
@@ -388,10 +428,8 @@ impl InputEngine {
 
         // SAFETY: FFI call; posts the forced reinstall request to the hook
         // thread's queue.
-        unsafe {
-            PostThreadMessageW(hook_thread_id, WM_REINSTALL_HOOK, WPARAM(1), LPARAM(0))
-        }
-        .is_ok()
+        unsafe { PostThreadMessageW(hook_thread_id, WM_REINSTALL_HOOK, WPARAM(1), LPARAM(0)) }
+            .is_ok()
     }
 
     /// Spawns the watchdog thread and installs the shared watchdog state.
@@ -399,7 +437,8 @@ impl InputEngine {
     fn start_watchdog(&self) {
         self.stop_watchdog();
 
-        if self.disposed.load(Ordering::SeqCst) || self.inner.stop_requested.load(Ordering::SeqCst) {
+        if self.disposed.load(Ordering::SeqCst) || self.inner.stop_requested.load(Ordering::SeqCst)
+        {
             return;
         }
 
@@ -791,6 +830,9 @@ fn dispatch_hook_event(
         key: VirtualKey(native.vkCode as u16),
         transition,
         is_synthetic: native.dwExtraInfo as u64 == SYNTHETIC_INPUT_TAG,
+        scan_code: native.scanCode as u16,
+        extended: native.flags.contains(LLKHF_EXTENDED),
+        time_ms: native.time,
     };
 
     if input.is_synthetic {
@@ -817,31 +859,91 @@ fn dispatch_hook_event(
     } else {
         lock(&engine.shared)
     };
-    let trigger = shared.trigger;
-    let result = machine::process_with_trigger(
-        shared.machine,
-        &input,
-        trigger,
-        &shared.output_modifiers,
-    );
+    if shared.machine.deadline_passed(input.time_ms) {
+        // The hold timer is due but has not been dispatched (WM_TIMER waits
+        // behind hook input, or SetTimer failed). Resolve it first so this
+        // event sees the same state an on-time timer would have left.
+        let current = std::mem::replace(&mut shared.machine, TriggerMachineState::IDLE);
+        let overdue = {
+            let config = machine_config(&shared);
+            machine::on_timeout(current, input.time_ms, &config)
+        };
+        shared.machine = overdue.state;
+        execute_decision(engine, &mut shared, overdue.decision, None);
+    }
+
+    let current = std::mem::replace(&mut shared.machine, TriggerMachineState::IDLE);
+    let result = {
+        let config = machine_config(&shared);
+        machine::process_event(current, &input, &config)
+    };
     shared.machine = result.state;
 
-    match result.decision {
-        InputDecision::PassThrough | InputDecision::Forward => {
+    let verdict = execute_decision(engine, &mut shared, result.decision, Some(&input));
+    if verdict == Verdict::Deliver {
+        shared.held_modifiers.apply(input.key, input.transition);
+    }
+    sync_timer(&mut shared);
+
+    match verdict {
+        Verdict::Deliver => {
             // SAFETY: FFI call; forward the event to the rest of the chain.
             unsafe { CallNextHookEx(Some(hook), code, wparam, lparam) }
         }
-        InputDecision::Suppress => LRESULT(1),
+        Verdict::Swallow => LRESULT(1),
+    }
+}
+
+fn machine_config(shared: &Shared) -> MachineConfig<'_> {
+    MachineConfig {
+        trigger: shared.trigger,
+        output_modifiers: &shared.output_modifiers,
+        tap_behavior: shared.tap_behavior,
+    }
+}
+
+/// What happens to the physical event that produced a decision.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Verdict {
+    Deliver,
+    Swallow,
+}
+
+/// Carries out a machine decision on the hook thread, for the hook callback
+/// (`physical` is the event being decided) and for the hold timer
+/// (`physical` is `None`, and the verdict is ignored). The caller holds
+/// `shared`; any SendInput here re-enters the callback only with tagged
+/// events, which never touch `shared`.
+fn execute_decision(
+    engine: &Arc<EngineInner>,
+    shared: &mut Shared,
+    decision: InputDecision,
+    physical: Option<&KeyboardEvent>,
+) -> Verdict {
+    match decision {
+        InputDecision::PassThrough => Verdict::Deliver,
+        InputDecision::Forward => {
+            if let Some(input) = physical
+                && shared.machine.phase == TriggerPhase::HyperActive
+            {
+                publish_chord(engine, shared, &BufferedKey::from_event(input));
+            }
+            Verdict::Deliver
+        }
+        InputDecision::Suppress => Verdict::Swallow,
         InputDecision::PressAndForward(modifiers) => {
             match shared.synthesizer.try_press(&modifiers) {
                 Ok(()) => {
-                    // SAFETY: FFI call; modifiers are held, key goes through.
-                    unsafe { CallNextHookEx(Some(hook), code, wparam, lparam) }
+                    // Modifiers are held; the key goes through.
+                    if let Some(input) = physical {
+                        publish_chord(engine, shared, &BufferedKey::from_event(input));
+                    }
+                    Verdict::Deliver
                 }
                 Err(error) => {
                     shared.machine = TriggerMachineState::IDLE;
                     set_status(engine, InputEngineStatus::Failed, Some(error));
-                    LRESULT(1)
+                    Verdict::Swallow
                 }
             }
         }
@@ -850,17 +952,153 @@ fn dispatch_hook_event(
                 set_status(engine, InputEngineStatus::Failed, Some(error));
             }
 
-            LRESULT(1)
+            Verdict::Swallow
         }
-        InputDecision::ReplayTrigger => {
-            if let Err(error) = shared.synthesizer.try_replay_trigger(trigger) {
+        InputDecision::Tap {
+            action,
+            then_replay,
+        } => {
+            let tapped = match action {
+                TapBehavior::SendTrigger => shared.synthesizer.try_replay_trigger(shared.trigger),
+                TapBehavior::Escape => shared.synthesizer.try_send_escape_tap(),
+                TapBehavior::Nothing => Ok(()),
+            };
+            if let Err(error) = tapped {
                 set_status(engine, InputEngineStatus::Failed, Some(error));
+            }
+            // Rollover typing: the keys pressed during the tap follow it,
+            // with no modifiers held.
+            if let Err(error) = shared.synthesizer.try_replay_keys(&then_replay) {
+                set_status(engine, InputEngineStatus::Failed, Some(error));
+            }
+            for key in &then_replay {
+                shared.held_modifiers.apply(key.key, key.transition);
             }
 
             // The physical key-down was already suppressed, so the physical
             // key-up stays suppressed even if Windows rejects the replay.
-            LRESULT(1)
+            Verdict::Swallow
         }
+        InputDecision::PressAndReplay { modifiers, keys } => {
+            let pressed = match shared.synthesizer.try_press(&modifiers) {
+                Ok(()) => true,
+                Err(error) => {
+                    shared.machine = TriggerMachineState::IDLE;
+                    set_status(engine, InputEngineStatus::Failed, Some(error));
+                    false
+                }
+            };
+            // The keys are replayed even when the press failed: the user's
+            // keystrokes were suppressed and must not be lost.
+            if let Err(error) = shared.synthesizer.try_replay_keys(&keys) {
+                set_status(engine, InputEngineStatus::Failed, Some(error));
+            }
+            for key in &keys {
+                shared.held_modifiers.apply(key.key, key.transition);
+                if pressed {
+                    publish_chord(engine, shared, key);
+                }
+            }
+
+            Verdict::Swallow
+        }
+    }
+}
+
+/// Reports a non-modifier key-down delivered under the active layer.
+/// Takes `lifecycle` briefly while `shared` is held — the allowed order.
+fn publish_chord(engine: &Arc<EngineInner>, shared: &Shared, key: &BufferedKey) {
+    if key.transition != KeyTransition::Down || is_modifier_key(key.key.0) {
+        return;
+    }
+    publish(
+        engine,
+        EngineEvent::LayerChord {
+            modifiers: shared.held_modifiers.chord_with(&shared.output_modifiers),
+            key: key.key,
+            scan_code: key.scan_code,
+            extended: key.extended,
+        },
+    );
+}
+
+/// Arms, re-arms, or kills the hook-thread timer so it matches the
+/// machine's hold deadline. Must run on the hook thread.
+fn sync_timer(shared: &mut Shared) {
+    let wanted = shared.machine.timer_deadline();
+    if let (Some(armed), Some(deadline)) = (shared.timer, wanted)
+        && armed.deadline_ms == deadline
+    {
+        return;
+    }
+
+    if let Some(armed) = shared.timer.take() {
+        // SAFETY: FFI call; the timer was created on this thread.
+        let _ = unsafe { KillTimer(None, armed.id) };
+    }
+
+    let Some(deadline) = wanted else {
+        return;
+    };
+    let remaining = deadline.wrapping_sub(current_tick()) as i32;
+    let elapse = remaining.max(USER_TIMER_MINIMUM as i32) as u32;
+    // SAFETY: FFI call; a thread timer (no window) dispatched to
+    // `timer_proc` by this thread's GetMessage/DispatchMessage pump.
+    let id = unsafe { SetTimer(None, 0, elapse, Some(timer_proc)) };
+    if id != 0 {
+        shared.timer = Some(ArmedTimer {
+            id,
+            deadline_ms: deadline,
+        });
+    }
+    // A failed SetTimer leaves the hold to resolve on the next key event:
+    // the hook callback runs any overdue timeout before deciding it.
+}
+
+/// The hold-timeout timer, dispatched on the hook thread by the message
+/// pump. Like the hook callback it must never unwind across FFI.
+unsafe extern "system" fn timer_proc(_hwnd: HWND, _message: u32, id: usize, _time: u32) {
+    let engine = HOOK_CONTEXT.with(|cell| match cell.try_borrow() {
+        Ok(cell) => cell.as_ref().map(|context| Arc::clone(&context.engine)),
+        Err(_) => None,
+    });
+    let Some(engine) = engine else {
+        // SAFETY: FFI call; a timer with no engine behind it is stale.
+        let _ = unsafe { KillTimer(None, id) };
+        return;
+    };
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Counts as a callback level so input re-entering during SendInput
+        // below falls back to try_lock instead of self-deadlocking.
+        let _depth = CallbackDepth::enter();
+        let mut shared = lock(&engine.shared);
+        // SAFETY: FFI call; thread timers repeat until killed, and every
+        // fire is handled once. The id belongs to this thread.
+        let _ = unsafe { KillTimer(None, id) };
+        if shared.timer.map(|armed| armed.id) != Some(id) {
+            // Forgotten by a reset on another thread.
+            return;
+        }
+        shared.timer = None;
+
+        let current = std::mem::replace(&mut shared.machine, TriggerMachineState::IDLE);
+        let result = {
+            let config = machine_config(&shared);
+            machine::on_timeout(current, current_tick(), &config)
+        };
+        shared.machine = result.state;
+        execute_decision(&engine, &mut shared, result.decision, None);
+        sync_timer(&mut shared);
+    }));
+
+    if result.is_err() {
+        emergency_disable(&engine);
+        set_status(
+            &engine,
+            InputEngineStatus::Failed,
+            Some("The keyboard hold timer failed.".to_string()),
+        );
     }
 }
 
@@ -874,8 +1112,40 @@ fn try_get_transition(message: u32) -> Option<KeyTransition> {
 
 fn reset_shared_state(inner: &Arc<EngineInner>) {
     let mut shared = lock(&inner.shared);
-    shared.machine = TriggerMachineState::IDLE;
+    reset_shared_locked(inner, &mut shared);
+}
+
+/// Drops the machine's phase and buffered keys, releases every generated
+/// modifier, and disarms the hold timer. Only the hook thread can kill its
+/// timer; any other thread forgets the id and `timer_proc` kills it on its
+/// next fire.
+fn reset_shared_locked(inner: &EngineInner, shared: &mut Shared) {
+    let machine = std::mem::replace(&mut shared.machine, TriggerMachineState::IDLE);
+    // Physical modifier events buffered behind an undecided hold are
+    // delivered now, so the OS never misses a real Shift/Ctrl/Alt/Win up.
+    // Buffered non-modifier downs are dropped; their physical ups pass.
+    let modifiers: Vec<BufferedKey> = machine
+        .buffered
+        .into_iter()
+        .filter(|key| is_modifier_key(key.key.0))
+        .collect();
+    let _ = shared.synthesizer.try_replay_keys(&modifiers);
+    shared.held_modifiers.clear();
     shared.synthesizer.release_all(&shared.output_modifiers);
+    if let Some(armed) = shared.timer.take() {
+        let hook_thread_id = inner.hook_thread_id.load(Ordering::SeqCst);
+        // SAFETY: FFI query with no preconditions.
+        if hook_thread_id != 0 && hook_thread_id == unsafe { GetCurrentThreadId() } {
+            // SAFETY: FFI call; the timer was created on this thread.
+            let _ = unsafe { KillTimer(None, armed.id) };
+        }
+    }
+}
+
+/// Milliseconds on the same 32-bit tick clock as `KBDLLHOOKSTRUCT.time`.
+fn current_tick() -> u32 {
+    // SAFETY: FFI query with no preconditions.
+    unsafe { GetTickCount() }
 }
 
 fn emergency_disable(inner: &Arc<EngineInner>) {
@@ -900,11 +1170,7 @@ fn set_status(engine: &Arc<EngineInner>, status: InputEngineStatus, error: Optio
     publish_status(engine, status, error);
 }
 
-fn set_status_locked(
-    lifecycle: &mut Lifecycle,
-    status: InputEngineStatus,
-    error: Option<String>,
-) {
+fn set_status_locked(lifecycle: &mut Lifecycle, status: InputEngineStatus, error: Option<String>) {
     lifecycle.status = status;
     lifecycle.status_error = error;
 }
@@ -985,15 +1251,18 @@ mod tests {
     use super::*;
 
     fn engine() -> InputEngine {
-        InputEngine::new(TriggerKey::CAPS_LOCK, vec![OutputModifier::Control])
+        InputEngine::new(
+            TriggerKey::CAPS_LOCK,
+            vec![OutputModifier::Control],
+            TapBehavior::SendTrigger,
+        )
     }
 
     #[test]
     fn reconcile_resets_the_machine_to_idle() {
         let engine = engine();
-        lock(&engine.inner.shared).machine = TriggerMachineState {
-            phase: machine::TriggerPhase::HyperActive,
-        };
+        lock(&engine.inner.shared).machine =
+            TriggerMachineState::in_phase(TriggerPhase::HyperActive);
 
         engine.reconcile();
 
@@ -1006,9 +1275,8 @@ mod tests {
     #[test]
     fn emergency_disable_resets_the_machine_to_idle() {
         let engine = engine();
-        lock(&engine.inner.shared).machine = TriggerMachineState {
-            phase: machine::TriggerPhase::TriggerHeld,
-        };
+        lock(&engine.inner.shared).machine =
+            TriggerMachineState::in_phase(TriggerPhase::TriggerHeld);
 
         engine.emergency_disable();
 
@@ -1024,16 +1292,21 @@ mod tests {
         // the generated layer before the new trigger takes effect — the same
         // release-then-swap order the C# engine used.
         let engine = engine();
-        lock(&engine.inner.shared).machine = TriggerMachineState {
-            phase: machine::TriggerPhase::HyperActive,
-        };
+        lock(&engine.inner.shared).machine =
+            TriggerMachineState::in_phase(TriggerPhase::HyperActive);
 
-        engine.configure(TriggerKey::SCROLL_LOCK, vec![OutputModifier::Alt]);
+        engine.configure(
+            TriggerKey::SCROLL_LOCK,
+            vec![OutputModifier::Alt],
+            TapBehavior::Escape,
+        );
 
         let shared = lock(&engine.inner.shared);
         assert_eq!(TriggerMachineState::IDLE, shared.machine);
         assert_eq!(TriggerKey::SCROLL_LOCK, shared.trigger);
         assert_eq!(&[OutputModifier::Alt], shared.output_modifiers.as_slice());
+        assert_eq!(TapBehavior::Escape, shared.tap_behavior);
+        assert!(shared.timer.is_none());
     }
 
     #[test]
@@ -1090,7 +1363,11 @@ mod tests {
         let engine = engine();
         let receiver = engine.subscribe();
 
-        set_status(&engine.inner, InputEngineStatus::Failed, Some("boom".to_string()));
+        set_status(
+            &engine.inner,
+            InputEngineStatus::Failed,
+            Some("boom".to_string()),
+        );
 
         assert_eq!(
             EngineEvent::StatusChanged {
