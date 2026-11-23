@@ -8,9 +8,16 @@ pub enum OutputModifier {
     Shift,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+/// What a quick tap of the trigger (pressed and released alone) does.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub enum TapBehavior {
-    CapsLock,
+    /// Replay the trigger key itself; for Caps Lock this toggles caps.
+    #[default]
+    SendTrigger,
+    /// Send an Escape press and release instead.
+    Escape,
+    /// The tap does nothing.
+    Nothing,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -25,7 +32,7 @@ pub struct HyperkeySettings {
 }
 
 impl HyperkeySettings {
-    pub const CURRENT_SCHEMA_VERSION: i32 = 2;
+    pub const CURRENT_SCHEMA_VERSION: i32 = 3;
 
     pub fn defaults() -> Self {
         Self::create(
@@ -38,7 +45,7 @@ impl HyperkeySettings {
             ],
             true,
             false,
-            TapBehavior::CapsLock,
+            TapBehavior::SendTrigger,
         )
         .expect("the compiled-in default settings satisfy every invariant")
     }
@@ -79,24 +86,13 @@ impl HyperkeySettings {
             return Err(format!("Unsupported trigger key: {}.", trigger.wire_name()));
         }
 
-        if tap_behavior != TapBehavior::CapsLock {
-            return Err("Unsupported tap behavior.".to_string());
-        }
-
         if output_modifiers.is_empty()
             || output_modifiers.len() > Self::defaults_output_modifiers().len()
         {
-            return Err(
-                "Choose at least one and no more than three output modifiers.".to_string(),
-            );
+            return Err("Choose at least one and no more than three output modifiers.".to_string());
         }
 
-        if output_modifiers
-            .iter()
-            .collect::<HashSet<_>>()
-            .len()
-            != output_modifiers.len()
-        {
+        if output_modifiers.iter().collect::<HashSet<_>>().len() != output_modifiers.len() {
             return Err("Output modifiers must be unique.".to_string());
         }
 
@@ -185,6 +181,13 @@ impl HyperkeySettings {
             self.tap_behavior,
             self.schema_version,
         )
+    }
+
+    pub fn with_tap_behavior(&self, tap_behavior: TapBehavior) -> Self {
+        Self {
+            tap_behavior,
+            ..self.clone()
+        }
     }
 
     fn defaults_output_modifiers() -> [OutputModifier; 3] {

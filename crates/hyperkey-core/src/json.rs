@@ -144,7 +144,10 @@ fn decode_utf32(bytes: &[u8], from_bytes: fn([u8; 4]) -> u32) -> String {
 /// Decodes UTF-16 units; a dangling byte becomes U+FFFD for the same reason.
 fn decode_utf16(bytes: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
     let (pairs, tail) = bytes.as_chunks::<2>();
-    let units = pairs.iter().map(|pair| from_bytes(*pair)).collect::<Vec<u16>>();
+    let units = pairs
+        .iter()
+        .map(|pair| from_bytes(*pair))
+        .collect::<Vec<u16>>();
     let mut text = String::from_utf16_lossy(&units);
     if !tail.is_empty() {
         text.push(char::REPLACEMENT_CHARACTER);
@@ -275,20 +278,26 @@ fn parse_modifiers(
 }
 
 fn parse_tap_behavior(value: Option<&str>, repairs: &mut Vec<String>) -> TapBehavior {
-    match value {
+    let Some(value) = value else {
         // Documents written before the field existed are allowed to omit it.
-        None => TapBehavior::CapsLock,
-        // Settings created before tap behavior was implemented used "Undecided".
-        Some(value)
-            if value.eq_ignore_ascii_case("CapsLock")
-                || value.eq_ignore_ascii_case("Undecided") =>
-        {
-            TapBehavior::CapsLock
-        }
-        Some(value) => {
-            repairs.push(format!("tap behavior \"{value}\" was reset to Caps Lock"));
-            TapBehavior::CapsLock
-        }
+        return TapBehavior::SendTrigger;
+    };
+    // "CapsLock" is the schema-2 name for replaying the trigger, and
+    // settings created before tap behavior was implemented used "Undecided".
+    const SEND_TRIGGER: &[&str] = &["Trigger", "CapsLock", "Undecided"];
+    const NOTHING: &[&str] = &["Nothing", "None"];
+    let matches = |names: &[&str]| names.iter().any(|name| name.eq_ignore_ascii_case(value));
+    if matches(SEND_TRIGGER) {
+        TapBehavior::SendTrigger
+    } else if value.eq_ignore_ascii_case("Escape") {
+        TapBehavior::Escape
+    } else if matches(NOTHING) {
+        TapBehavior::Nothing
+    } else {
+        repairs.push(format!(
+            "tap behavior \"{value}\" was reset to sending the trigger key"
+        ));
+        TapBehavior::SendTrigger
     }
 }
 
@@ -306,7 +315,9 @@ fn to_wire_name_modifier(modifier: OutputModifier) -> &'static str {
 
 fn to_wire_name_tap_behavior(tap_behavior: TapBehavior) -> &'static str {
     match tap_behavior {
-        TapBehavior::CapsLock => "CapsLock",
+        TapBehavior::SendTrigger => "Trigger",
+        TapBehavior::Escape => "Escape",
+        TapBehavior::Nothing => "Nothing",
     }
 }
 

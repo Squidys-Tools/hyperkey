@@ -50,7 +50,13 @@ fn caps_lock_tap_replays_normal_caps_lock_and_returns_to_idle() {
     let released = process(held.state, caps_lock(KeyTransition::Up));
 
     assert!(matches!(held.decision, InputDecision::Suppress));
-    assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        released.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
     assert_eq!(TriggerPhase::Idle, released.state.phase);
 }
 
@@ -58,13 +64,13 @@ fn caps_lock_tap_replays_normal_caps_lock_and_returns_to_idle() {
 fn caps_lock_tap_behavior_round_trips_and_reads_legacy_settings() {
     let serialized = json::serialize(&HyperkeySettings::defaults());
     assert!(
-        serialized.contains("\"tapBehavior\": \"CapsLock\""),
-        "Expected the current tap behavior to serialize as CapsLock."
+        serialized.contains("\"tapBehavior\": \"Trigger\""),
+        "Expected the default tap behavior to serialize as Trigger."
     );
 
     let round_trip = json::parse(&serialized);
     assert!(!round_trip.used_defaults);
-    assert_eq!(TapBehavior::CapsLock, round_trip.settings.tap_behavior());
+    assert_eq!(TapBehavior::SendTrigger, round_trip.settings.tap_behavior());
     assert!(!round_trip.settings.launch_to_tray());
 
     let tray_settings = HyperkeySettings::defaults().with_launch_to_tray(true);
@@ -73,12 +79,15 @@ fn caps_lock_tap_behavior_round_trips_and_reads_legacy_settings() {
     assert!(tray_round_trip.settings.launch_to_tray());
 
     let legacy = serialized.replace(
-        "\"tapBehavior\": \"CapsLock\"",
+        "\"tapBehavior\": \"Trigger\"",
         "\"tapBehavior\": \"Undecided\"",
     );
     let legacy_result = json::parse(&legacy);
     assert!(!legacy_result.used_defaults);
-    assert_eq!(TapBehavior::CapsLock, legacy_result.settings.tap_behavior());
+    assert_eq!(
+        TapBehavior::SendTrigger,
+        legacy_result.settings.tap_behavior()
+    );
 
     let legacy_without_launch_to_tray = r#"
         {
@@ -138,9 +147,15 @@ fn configured_scroll_lock_acts_as_the_trigger() {
     );
 
     assert_eq!(TriggerPhase::Idle, caps_lock_result.state.phase);
-    assert!(matches!(caps_lock_result.decision, InputDecision::PassThrough));
+    assert!(matches!(
+        caps_lock_result.decision,
+        InputDecision::PassThrough
+    ));
     assert_eq!(TriggerPhase::TriggerHeld, scroll_lock_result.state.phase);
-    assert!(matches!(scroll_lock_result.decision, InputDecision::Suppress));
+    assert!(matches!(
+        scroll_lock_result.decision,
+        InputDecision::Suppress
+    ));
 }
 
 #[test]
@@ -148,11 +163,14 @@ fn hyper_active_forwards_other_keys_until_caps_lock_release() {
     let held = process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down));
     let active = process(held.state, key(0x41, KeyTransition::Down));
     let forwarded = process(active.state, key(0x41, KeyTransition::Up));
-    let released = process(forwarded.state, caps_lock(KeyTransition::Up));
+    let released = process(forwarded.state.clone(), caps_lock(KeyTransition::Up));
 
     assert!(matches!(forwarded.decision, InputDecision::Forward));
     assert_eq!(TriggerPhase::HyperActive, forwarded.state.phase);
-    assert!(matches!(released.decision, InputDecision::ReleaseAndSuppress(_)));
+    assert!(matches!(
+        released.decision,
+        InputDecision::ReleaseAndSuppress(_)
+    ));
     assert_eq!(TriggerPhase::Idle, released.state.phase);
 }
 
@@ -187,8 +205,7 @@ fn key_up_before_activation_passes_through() {
 
 #[test]
 fn synthetic_events_never_change_the_state() {
-    let synthetic_caps_lock =
-        KeyboardEvent::synthetic(VirtualKey::CAPS_LOCK, KeyTransition::Down);
+    let synthetic_caps_lock = KeyboardEvent::synthetic(VirtualKey::CAPS_LOCK, KeyTransition::Down);
     let transition = process(TriggerMachineState::IDLE, synthetic_caps_lock);
 
     assert_eq!(TriggerPhase::Idle, transition.state.phase);
@@ -218,7 +235,10 @@ fn repeated_cycles_do_not_accumulate_state() {
         state = released.state;
 
         assert_eq!(TriggerPhase::Idle, state.phase);
-        assert!(matches!(released.decision, InputDecision::ReleaseAndSuppress(_)));
+        assert!(matches!(
+            released.decision,
+            InputDecision::ReleaseAndSuppress(_)
+        ));
     }
 }
 
@@ -227,28 +247,59 @@ fn arbitrary_letter_trigger_runs_full_cycle() {
     let trigger = TriggerKey::try_create(0x4A).expect("Expected J to be a supported trigger.");
     assert_eq!("J", trigger.wire_name());
 
-    let held = process_with(TriggerMachineState::IDLE, key(0x4A, KeyTransition::Down), trigger);
+    let held = process_with(
+        TriggerMachineState::IDLE,
+        key(0x4A, KeyTransition::Down),
+        trigger,
+    );
     assert_eq!(TriggerPhase::TriggerHeld, held.state.phase);
     assert!(matches!(held.decision, InputDecision::Suppress));
 
     let tapped = process_with(held.state, key(0x4A, KeyTransition::Up), trigger);
     assert_eq!(TriggerPhase::Idle, tapped.state.phase);
-    assert!(matches!(tapped.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        tapped.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
 
-    let reheld = process_with(TriggerMachineState::IDLE, key(0x4A, KeyTransition::Down), trigger);
-    let active = process_with(reheld.state, key(0x4B, KeyTransition::Down), trigger);
+    // J is a typing key, so the chord key is buffered until its own key-up
+    // proves the press was a chord rather than typing rollover.
+    let reheld = process_with(
+        TriggerMachineState::IDLE,
+        key(0x4A, KeyTransition::Down),
+        trigger,
+    );
+    let buffered = process_with(reheld.state, key(0x4B, KeyTransition::Down), trigger);
+    assert_eq!(TriggerPhase::TriggerHeld, buffered.state.phase);
+    assert!(matches!(buffered.decision, InputDecision::Suppress));
+    let active = process_with(buffered.state, key(0x4B, KeyTransition::Up), trigger);
     assert_eq!(TriggerPhase::HyperActive, active.state.phase);
-    let InputDecision::PressAndForward(press_modifiers) = &active.decision else {
-        panic!("Expected PressAndForward, got {:?}.", active.decision);
+    let InputDecision::PressAndReplay {
+        modifiers: press_modifiers,
+        keys,
+    } = &active.decision
+    else {
+        panic!("Expected PressAndReplay, got {:?}.", active.decision);
     };
     assert_eq!(modifiers(), press_modifiers.as_slice());
+    assert_eq!(2, keys.len());
 
     let released = process_with(active.state, key(0x4A, KeyTransition::Up), trigger);
     assert_eq!(TriggerPhase::Idle, released.state.phase);
-    assert!(matches!(released.decision, InputDecision::ReleaseAndSuppress(_)));
+    assert!(matches!(
+        released.decision,
+        InputDecision::ReleaseAndSuppress(_)
+    ));
 
     // Other letters are ordinary keys while J is the trigger.
-    let unrelated = process_with(TriggerMachineState::IDLE, key(0x41, KeyTransition::Down), trigger);
+    let unrelated = process_with(
+        TriggerMachineState::IDLE,
+        key(0x41, KeyTransition::Down),
+        trigger,
+    );
     assert_eq!(TriggerPhase::Idle, unrelated.state.phase);
     assert!(matches!(unrelated.decision, InputDecision::PassThrough));
 }
@@ -259,12 +310,22 @@ fn function_key_trigger_tap_replays() {
     assert_eq!("F9", trigger.wire_name());
     assert_eq!("F9", trigger.display_label());
 
-    let held = process_with(TriggerMachineState::IDLE, key(0x78, KeyTransition::Down), trigger);
+    let held = process_with(
+        TriggerMachineState::IDLE,
+        key(0x78, KeyTransition::Down),
+        trigger,
+    );
     assert!(matches!(held.decision, InputDecision::Suppress));
 
     let released = process_with(held.state, key(0x78, KeyTransition::Up), trigger);
     assert_eq!(TriggerPhase::Idle, released.state.phase);
-    assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        released.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -328,8 +389,8 @@ fn trigger_key_allowlist_accepts_normal_keys() {
 fn trigger_key_allowlist_rejects_reserved_keys() {
     // Modifiers, system-reserved, extended-scan-code, media, and synthetic codes.
     let rejected: &[u16] = &[
-        0x00, 0x10, 0x11, 0x12, 0x13, 0x1B, 0x25, 0x26, 0x27, 0x28, 0x2C, 0x2D, 0x2E, 0x5B,
-        0x5C, 0x5D, 0x6F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xAD, 0xB3, 0xE7, 0xFF,
+        0x00, 0x10, 0x11, 0x12, 0x13, 0x1B, 0x25, 0x26, 0x27, 0x28, 0x2C, 0x2D, 0x2E, 0x5B, 0x5C,
+        0x5D, 0x6F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xAD, 0xB3, 0xE7, 0xFF,
     ];
 
     for &code in rejected {
@@ -382,8 +443,8 @@ fn trigger_wire_names_round_trip() {
 
     let serialized = json::serialize(&HyperkeySettings::defaults());
     assert!(
-        serialized.contains("\"schemaVersion\": 2"),
-        "Expected new settings documents to declare schema version 2."
+        serialized.contains("\"schemaVersion\": 3"),
+        "Expected new settings documents to declare schema version 3."
     );
 }
 
@@ -416,7 +477,10 @@ fn unknown_trigger_name_falls_back_to_defaults() {
 
     assert!(!result.used_defaults);
     assert!(result.repaired);
-    assert_eq!(HyperkeySettings::defaults().trigger(), result.settings.trigger());
+    assert_eq!(
+        HyperkeySettings::defaults().trigger(),
+        result.settings.trigger()
+    );
     assert_eq!(
         HyperkeySettings::defaults().output_modifiers(),
         result.settings.output_modifiers()
@@ -434,7 +498,13 @@ fn rapid_trigger_taps_replay_each_cycle() {
         state = released.state;
 
         assert!(matches!(held.decision, InputDecision::Suppress));
-        assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+        assert!(matches!(
+            released.decision,
+            InputDecision::Tap {
+                action: TapBehavior::SendTrigger,
+                ..
+            }
+        ));
         assert_eq!(TriggerPhase::Idle, state.phase);
     }
 }
@@ -447,7 +517,13 @@ fn tap_then_hold_still_activates_the_chord() {
         process(TriggerMachineState::IDLE, caps_lock(KeyTransition::Down)).state,
         caps_lock(KeyTransition::Up),
     );
-    assert!(matches!(tap.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        tap.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
 
     let held = process(tap.state, caps_lock(KeyTransition::Down));
     let active = process(held.state, key(0x41, KeyTransition::Down));
@@ -467,7 +543,13 @@ fn solo_trigger_tap_never_touches_output_modifiers() {
     let released = process(held.state, caps_lock(KeyTransition::Up));
 
     assert!(matches!(held.decision, InputDecision::Suppress));
-    assert!(matches!(released.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        released.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
     assert!(!matches!(held.decision, InputDecision::PressAndForward(_)));
     assert!(!matches!(
         released.decision,
@@ -479,7 +561,13 @@ fn solo_trigger_tap_never_touches_output_modifiers() {
         process(released.state, caps_lock(KeyTransition::Down)).state,
         caps_lock(KeyTransition::Up),
     );
-    assert!(matches!(second_tap.decision, InputDecision::ReplayTrigger));
+    assert!(matches!(
+        second_tap.decision,
+        InputDecision::Tap {
+            action: TapBehavior::SendTrigger,
+            ..
+        }
+    ));
     assert_eq!(TriggerPhase::Idle, second_tap.state.phase);
 }
 
@@ -544,7 +632,10 @@ fn key_held_before_trigger_activates_layer_on_auto_repeat() {
     // chord press, so the first repeat activates the layer. This documents
     // current behavior (the key then gets the modifier layer applied).
     let key_held_first = process(TriggerMachineState::IDLE, key(0x41, KeyTransition::Down));
-    assert!(matches!(key_held_first.decision, InputDecision::PassThrough));
+    assert!(matches!(
+        key_held_first.decision,
+        InputDecision::PassThrough
+    ));
 
     let held = process(key_held_first.state, caps_lock(KeyTransition::Down));
     let repeat = process(held.state, key(0x41, KeyTransition::Down));
@@ -566,10 +657,7 @@ fn trigger_released_mid_chord_releases_modifiers_and_returns_to_idle() {
     let released = process(active.state, caps_lock(KeyTransition::Up));
 
     let InputDecision::ReleaseAndSuppress(release_modifiers) = &released.decision else {
-        panic!(
-            "Expected ReleaseAndSuppress, got {:?}.",
-            released.decision
-        );
+        panic!("Expected ReleaseAndSuppress, got {:?}.", released.decision);
     };
     assert_eq!(modifiers(), release_modifiers.as_slice());
     assert_eq!(TriggerPhase::Idle, released.state.phase);
@@ -626,18 +714,12 @@ fn synthetic_trigger_release_does_not_end_a_hold() {
     );
 
     assert_eq!(TriggerPhase::TriggerHeld, synthetic_up.state.phase);
-    assert!(matches!(
-        synthetic_up.decision,
-        InputDecision::PassThrough
-    ));
+    assert!(matches!(synthetic_up.decision, InputDecision::PassThrough));
 
     // The still-held trigger activates the layer on the next real key.
     let active = process(synthetic_up.state, key(0x41, KeyTransition::Down));
     assert_eq!(TriggerPhase::HyperActive, active.state.phase);
-    assert!(matches!(
-        active.decision,
-        InputDecision::PressAndForward(_)
-    ));
+    assert!(matches!(active.decision, InputDecision::PressAndForward(_)));
 }
 
 #[test]
@@ -652,10 +734,7 @@ fn synthetic_trigger_release_does_not_disengage_the_layer() {
     );
 
     assert_eq!(TriggerPhase::HyperActive, synthetic_up.state.phase);
-    assert!(matches!(
-        synthetic_up.decision,
-        InputDecision::PassThrough
-    ));
+    assert!(matches!(synthetic_up.decision, InputDecision::PassThrough));
 
     let released = process(synthetic_up.state, caps_lock(KeyTransition::Up));
     assert!(matches!(

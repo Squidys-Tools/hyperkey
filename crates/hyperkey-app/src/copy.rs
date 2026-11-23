@@ -1,5 +1,6 @@
 //! User-facing text: hints, labels, and status wording. Pure functions and
 //! constants, so the wording is testable without a window.
+use hyperkey_core::keys::ChordModifier;
 use hyperkey_core::settings::OutputModifier;
 use hyperkey_input::engine::InputEngineStatus;
 
@@ -11,6 +12,40 @@ pub const INVALID_KEY_HINT: &str =
     "That key can't be used as the trigger. Try another key, or press Esc to cancel.";
 pub const MODIFIER_CHOICE_HINT: &str = "Choose one or more modifiers.";
 pub const MODIFIER_REQUIRED_HINT: &str = "Choose at least one modifier.";
+pub const TYPING_SAFE_NOTE: &str =
+    "Typing-safe: a key counts as a shortcut only after a full press or 200 ms.";
+pub const TAP_ROW_TITLE: &str = "When tapped";
+pub const TAP_BEHAVIOR_HINT: &str =
+    "What a quick tap of the trigger does. Holding it longer than half a second sends nothing.";
+pub const TAP_ESCAPE_LABEL: &str = "Escape";
+pub const TAP_NOTHING_LABEL: &str = "Nothing";
+pub const TRY_IT_TITLE: &str = "Try it";
+pub const TRY_IT_WAITING: &str = "Waiting…";
+
+/// The "Try it" row description.
+pub fn try_it_hint(trigger_label: &str) -> String {
+    format!("Hold {trigger_label} and press any key.")
+}
+
+/// A chord for display, e.g. "Ctrl + Alt + Shift + F": modifiers in the
+/// fixed Win, Control, Alt, Shift order, each once, then the key.
+pub fn chord_label(modifiers: &[ChordModifier], key_label: &str) -> String {
+    let mut ordered = modifiers.to_vec();
+    ordered.sort();
+    ordered.dedup();
+    let mut parts: Vec<&str> = ordered.iter().map(chord_modifier_label).collect();
+    parts.push(key_label);
+    parts.join(" + ")
+}
+
+fn chord_modifier_label(modifier: &ChordModifier) -> &'static str {
+    match modifier {
+        ChordModifier::Win => "Win",
+        ChordModifier::Control => "Ctrl",
+        ChordModifier::Alt => "Alt",
+        ChordModifier::Shift => "Shift",
+    }
+}
 
 /// The header badge: a one-word summary of whether Hyperkey is working.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -237,5 +272,32 @@ mod tests {
     fn version_label_is_v_plus_the_crate_version() {
         assert_eq!(version_label(), format!("v{}", env!("CARGO_PKG_VERSION")));
         assert!(version_label().starts_with('v'));
+    }
+
+    #[test]
+    fn chord_label_orders_modifiers_then_the_key() {
+        let reordered = [ChordModifier::Shift, ChordModifier::Control];
+        assert_eq!(chord_label(&reordered, "F"), "Ctrl + Shift + F");
+        assert_eq!(
+            chord_label(
+                &[
+                    ChordModifier::Shift,
+                    ChordModifier::Alt,
+                    ChordModifier::Win,
+                    ChordModifier::Control,
+                    ChordModifier::Alt,
+                ],
+                "Space"
+            ),
+            "Win + Ctrl + Alt + Shift + Space"
+        );
+    }
+
+    #[test]
+    fn try_it_hint_names_the_trigger() {
+        assert_eq!(
+            try_it_hint("Caps Lock"),
+            "Hold Caps Lock and press any key."
+        );
     }
 }

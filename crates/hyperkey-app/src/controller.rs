@@ -2,7 +2,7 @@
 //! tray, and every user-visible message, and implements each operation the UI
 //! or tray can trigger. Nothing here knows about GPUI.
 use crate::copy::{
-    CAPTURE_TRIGGER_HINT, IDLE_TRIGGER_HINT, INVALID_KEY_HINT, MODIFIER_CHOICE_HINT,
+    self, CAPTURE_TRIGGER_HINT, IDLE_TRIGGER_HINT, INVALID_KEY_HINT, MODIFIER_CHOICE_HINT,
     MODIFIER_KEY_HINT, MODIFIER_REQUIRED_HINT,
 };
 use crate::platform::session_window::SessionEvent;
@@ -10,7 +10,7 @@ use crate::platform::{clipboard, startup, tray};
 use crate::settings_store::{self, SettingsStore};
 use futures::channel::mpsc::UnboundedSender;
 use hyperkey_core::keys::{CaptureDecision, classify_capture};
-use hyperkey_core::settings::{HyperkeySettings, OutputModifier};
+use hyperkey_core::settings::{HyperkeySettings, OutputModifier, TapBehavior};
 use hyperkey_input::capture::{CapturedKey, KeyCapture};
 use hyperkey_input::engine::{EngineEvent, InputEngine, InputEngineStatus};
 use std::sync::mpsc::Receiver;
@@ -49,6 +49,9 @@ pub struct Controller {
     /// Whether startup registration is applied (off for dev isolation).
     manage_startup: bool,
     is_quitting: bool,
+    /// The last chord the active layer delivered, e.g. "Ctrl + Alt + Shift +
+    /// F", for the live tester. Cleared whenever the settings change.
+    last_chord: Option<String>,
 }
 
 impl Controller {
@@ -60,7 +63,11 @@ impl Controller {
         let settings = load.settings;
         let manage_startup = !settings_store::is_isolated();
 
-        let engine = InputEngine::new(settings.trigger(), settings.output_modifiers().to_vec());
+        let engine = InputEngine::new(
+            settings.trigger(),
+            settings.output_modifiers().to_vec(),
+            settings.tap_behavior(),
+        );
         let startup_error = if manage_startup {
             startup::apply(settings.launch_at_startup()).err()
         } else {
@@ -101,6 +108,7 @@ impl Controller {
             modifier_hint: MODIFIER_CHOICE_HINT,
             manage_startup,
             is_quitting: false,
+            last_chord: None,
         }
     }
 
@@ -145,8 +153,23 @@ impl Controller {
         self.capturing
     }
 
+    #[cfg(test)]
     pub fn trigger_hint(&self) -> &str {
         &self.trigger_hint
+    }
+
+    /// The trigger row's description: the hint, plus the typing-safe note
+    /// for a typing-key trigger while the hint is the idle one. A capture
+    /// error or rejection message is shown on its own.
+    pub fn trigger_description(&self) -> String {
+        if !self.capturing
+            && self.settings.trigger().is_typing_key()
+            && self.trigger_hint == IDLE_TRIGGER_HINT
+        {
+            format!("{} {}", self.trigger_hint, copy::TYPING_SAFE_NOTE)
+        } else {
+            self.trigger_hint.clone()
+        }
     }
 
     pub fn modifier_hint(&self) -> &str {
@@ -155,6 +178,12 @@ impl Controller {
 
     pub fn has_modifier(&self, modifier: OutputModifier) -> bool {
         self.settings.output_modifiers().contains(&modifier)
+    }
+
+    /// The last chord delivered under the active layer, if any since the
+    /// settings last changed.
+    pub fn last_chord(&self) -> Option<&str> {
+        self.last_chord.as_deref()
     }
 
     // ---- operations ----------------------------------------------------
@@ -173,6 +202,13 @@ impl Controller {
 
     pub fn set_launch_to_tray(&mut self, to_tray: bool) {
         self.update_settings(self.settings.with_launch_to_tray(to_tray), true);
+    }
+
+    pub fn set_tap_behavior(&mut self, tap_behavior: TapBehavior) {
+        if self.settings.tap_behavior() == tap_behavior {
+            return;
+        }
+        self.update_settings(self.settings.with_tap_behavior(tap_behavior), true);
     }
 
     /// Selects or deselects one output modifier. Deselecting the last one is
@@ -282,17 +318,29 @@ impl Controller {
         });
     }
 
-    /// Keeps the tray icon in sync with hook health and reports a failure
-    /// that has no other explanation yet.
+    /// Keeps the tray icon in sync with hook health, reports a failure that
+    /// has no other explanation yet, and records chords for the live tester.
     pub fn on_engine_event(&mut self, event: EngineEvent) {
-        if let EngineEvent::StatusChanged { status, .. } = event {
-            if status == InputEngineStatus::Failed && self.diagnostic_message.is_none() {
-                self.diagnostic_message = self
-                    .engine
-                    .status_error()
-                    .or_else(|| Some("The keyboard hook stopped.".to_string()));
+        match event {
+            EngineEvent::StatusChanged { status, .. } => {
+                if status == InputEngineStatus::Failed && self.diagnostic_message.is_none() {
+                    self.diagnostic_message = self
+                        .engine
+                        .status_error()
+                        .or_else(|| Some("The keyboard hook stopped.".to_string()));
+                }
+                self.refresh_tray();
             }
-            self.refresh_tray();
+            EngineEvent::HookRecovered { .. } => {}
+            EngineEvent::LayerChord {
+                modifiers,
+                key,
+                scan_code,
+                extended,
+            } => {
+                let key = hyperkey_input::key_label(key.0, scan_code, extended);
+                self.last_chord = Some(copy::chord_label(&modifiers, &key));
+            }
         }
     }
 
@@ -337,6 +385,10 @@ impl Controller {
             format!("Enabled: {}", bool_label(self.settings.enabled())),
             format!("Trigger: {}", self.settings.trigger().display_label()),
             format!("Output modifiers: {modifiers}"),
+            format!(
+                "Tap action: {}",
+                tap_behavior_name(self.settings.tap_behavior())
+            ),
             format!("Input status: {:?}", self.engine.status()),
             format!(
                 "Input status error: {}",
@@ -366,7 +418,8 @@ impl Controller {
     /// an in-flight trigger capture.
     fn update_settings(&mut self, settings: HyperkeySettings, persist: bool) {
         let input_changed = self.settings.trigger() != settings.trigger()
-            || self.settings.output_modifiers() != settings.output_modifiers();
+            || self.settings.output_modifiers() != settings.output_modifiers()
+            || self.settings.tap_behavior() != settings.tap_behavior();
         let startup_changed = self.settings.launch_at_startup() != settings.launch_at_startup();
         self.settings = settings;
 
@@ -382,6 +435,7 @@ impl Controller {
             self.engine.configure(
                 self.settings.trigger(),
                 self.settings.output_modifiers().to_vec(),
+                self.settings.tap_behavior(),
             );
         }
 
@@ -401,6 +455,7 @@ impl Controller {
 
         self.cancel_capture();
         self.copy_status = None;
+        self.last_chord = None;
         self.refresh_tray();
     }
 
@@ -427,6 +482,14 @@ fn bool_label(value: bool) -> &'static str {
     if value { "True" } else { "False" }
 }
 
+fn tap_behavior_name(tap_behavior: TapBehavior) -> &'static str {
+    match tap_behavior {
+        TapBehavior::SendTrigger => "Send trigger",
+        TapBehavior::Escape => "Escape",
+        TapBehavior::Nothing => "Nothing",
+    }
+}
+
 fn modifier_name(modifier: &OutputModifier) -> &'static str {
     match modifier {
         OutputModifier::Control => "Control",
@@ -438,7 +501,7 @@ fn modifier_name(modifier: &OutputModifier) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyperkey_core::keys::TriggerKey;
+    use hyperkey_core::keys::{ChordModifier, TriggerKey, VirtualKey};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -457,7 +520,11 @@ mod tests {
     /// the engine's stop/no-op branch instead of installing a real hook.
     fn controller_in(directory: &Path) -> Controller {
         let settings = HyperkeySettings::defaults().with_enabled(false);
-        let engine = InputEngine::new(settings.trigger(), settings.output_modifiers().to_vec());
+        let engine = InputEngine::new(
+            settings.trigger(),
+            settings.output_modifiers().to_vec(),
+            settings.tap_behavior(),
+        );
         let (events, _receiver) = futures::channel::mpsc::unbounded();
         Controller {
             settings,
@@ -475,6 +542,7 @@ mod tests {
             modifier_hint: MODIFIER_CHOICE_HINT,
             manage_startup: false,
             is_quitting: false,
+            last_chord: None,
         }
     }
 
@@ -544,6 +612,36 @@ mod tests {
             loaded.settings.output_modifiers()
         );
         assert!(!directory.join("settings.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_typing_safe_note_follows_only_the_idle_hint() {
+        let directory = test_directory("typing-safe-note");
+        let mut controller = controller_in(&directory);
+        // Caps Lock is not a typing key: no note.
+        assert_eq!(IDLE_TRIGGER_HINT, controller.trigger_description());
+
+        controller.settings = controller
+            .settings
+            .with_trigger(TriggerKey::try_create(0x20).unwrap())
+            .unwrap();
+        assert_eq!(
+            format!("{IDLE_TRIGGER_HINT} {}", copy::TYPING_SAFE_NOTE),
+            controller.trigger_description()
+        );
+
+        // A capture-hook failure leaves `capturing` false; its message is
+        // shown alone.
+        controller.trigger_hint = "The key capture hook could not be installed.".to_string();
+        assert_eq!(
+            "The key capture hook could not be installed.",
+            controller.trigger_description()
+        );
+
+        controller.capturing = true;
+        controller.trigger_hint = CAPTURE_TRIGGER_HINT.to_string();
+        assert_eq!(CAPTURE_TRIGGER_HINT, controller.trigger_description());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -669,6 +767,7 @@ mod tests {
             "Enabled: False".to_string(),
             "Trigger: Caps Lock".to_string(),
             "Output modifiers: Control, Alt, Shift".to_string(),
+            "Tap action: Send trigger".to_string(),
             "Input status: Stopped".to_string(),
             "Input status error: None".to_string(),
             "Last automatic hook recovery: None".to_string(),
@@ -680,6 +779,60 @@ mod tests {
         .join("\r\n");
 
         assert_eq!(expected, controller.diagnostic_details());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn tap_behavior_is_persisted() {
+        let directory = test_directory("tap-behavior");
+        let mut controller = controller_in(&directory);
+
+        controller.set_tap_behavior(TapBehavior::Escape);
+
+        assert_eq!(TapBehavior::Escape, controller.settings.tap_behavior());
+        let loaded = controller.store.load();
+        assert_eq!(TapBehavior::Escape, loaded.settings.tap_behavior());
+
+        controller.set_tap_behavior(TapBehavior::Nothing);
+        assert_eq!(
+            TapBehavior::Nothing,
+            controller.store.load().settings.tap_behavior()
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_layer_chord_becomes_the_last_chord_label() {
+        // Modifiers display in Ctrl, Alt, Shift order whatever order the
+        // engine reports them in.
+        let directory = test_directory("layer-chord");
+        let mut controller = controller_in(&directory);
+        assert_eq!(None, controller.last_chord());
+
+        controller.on_engine_event(EngineEvent::LayerChord {
+            modifiers: vec![
+                ChordModifier::Shift,
+                ChordModifier::Control,
+                ChordModifier::Alt,
+            ],
+            key: VirtualKey(0x74),
+            scan_code: 0x3F,
+            extended: false,
+        });
+
+        assert_eq!(Some("Ctrl + Alt + Shift + F5"), controller.last_chord());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_settings_change_clears_the_last_chord() {
+        let directory = test_directory("chord-cleared");
+        let mut controller = controller_in(&directory);
+        controller.last_chord = Some("Ctrl + F5".to_string());
+
+        controller.set_tap_behavior(TapBehavior::Escape);
+
+        assert_eq!(None, controller.last_chord());
         let _ = std::fs::remove_dir_all(&directory);
     }
 }

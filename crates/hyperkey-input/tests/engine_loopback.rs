@@ -9,7 +9,7 @@
 //! Runs only on demand: `cargo test -p hyperkey-input -- --ignored`.
 
 use hyperkey_core::keys::{KeyTransition, TriggerKey};
-use hyperkey_core::settings::OutputModifier;
+use hyperkey_core::settings::{OutputModifier, TapBehavior};
 use hyperkey_input::engine::InputEngine;
 use hyperkey_input::synth::SYNTHETIC_INPUT_TAG;
 use std::ffi::c_void;
@@ -24,8 +24,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, PM_REMOVE, PeekMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 const TRIGGER_CODE: u16 = 0x85; // F22.
@@ -41,32 +41,73 @@ static OBSERVER_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 /// statics, so they can never run concurrently even under a parallel harness.
 static SERIAL: Mutex<()> = Mutex::new(());
 
+/// A typing-key trigger for the permissive-hold cases: Num Sep (0x6C) is in
+/// the allowlist and counts as a typing key, but most layouts give it no
+/// character, so its tap replay is inert.
+const TYPING_TRIGGER_CODE: u16 = 0x6C;
+
 #[test]
 #[ignore]
 fn generalized_trigger_works_end_to_end_on_the_real_hook() {
     let _serial = SERIAL.lock().unwrap();
-    run_loopback(sender_main, assert_log_sequence)
+    run_loopback(
+        TRIGGER_CODE,
+        TapBehavior::SendTrigger,
+        sender_main,
+        assert_log_sequence,
+    )
 }
 
 #[test]
 #[ignore]
 fn disable_mid_chord_releases_held_modifiers() {
     let _serial = SERIAL.lock().unwrap();
-    run_loopback(disable_sender_main, assert_disable_log_sequence)
+    run_loopback(
+        TRIGGER_CODE,
+        TapBehavior::SendTrigger,
+        disable_sender_main,
+        assert_disable_log_sequence,
+    )
+}
+
+#[test]
+#[ignore]
+fn typing_trigger_permissive_hold_end_to_end() {
+    let _serial = SERIAL.lock().unwrap();
+    run_loopback(
+        TYPING_TRIGGER_CODE,
+        TapBehavior::SendTrigger,
+        typing_sender_main,
+        assert_typing_log_sequence,
+    )
+}
+
+#[test]
+#[ignore]
+fn tap_behavior_nothing_and_long_hold_send_no_trigger() {
+    let _serial = SERIAL.lock().unwrap();
+    run_loopback(
+        TRIGGER_CODE,
+        TapBehavior::Nothing,
+        nothing_sender_main,
+        assert_nothing_log_sequence,
+    )
 }
 
 fn run_loopback(
+    trigger_code: u16,
+    tap_behavior: TapBehavior,
     sender_main: fn(),
     assert: fn(&[String]) -> Result<(), String>,
 ) {
-    let trigger = TriggerKey::try_create(TRIGGER_CODE)
-        .expect("F22 must be a supported trigger for the loopback test.");
+    let trigger = TriggerKey::try_create(trigger_code)
+        .expect("The loopback trigger must be a supported trigger.");
     let modifiers = vec![
         OutputModifier::Control,
         OutputModifier::Alt,
         OutputModifier::Shift,
     ];
-    let engine = InputEngine::new(trigger, modifiers);
+    let engine = InputEngine::new(trigger, modifiers, tap_behavior);
 
     {
         let mut log = LOG.lock().unwrap();
@@ -94,28 +135,29 @@ fn run_loopback(
     let observer = observer.expect("The test observation hook could not be installed.");
     OBSERVER_HOOK.store(observer.0, Ordering::SeqCst);
 
-    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
-        if !engine.start() {
-            return Err("The engine under test could not be started.".to_string());
-        }
+    let run_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
+            if !engine.start() {
+                return Err("The engine under test could not be started.".to_string());
+            }
 
-        let sender = std::thread::Builder::new()
-            .name("loopback sender".to_string())
-            .spawn(sender_main)
-            .map_err(|error| format!("The loopback sender could not start. {error}"))?;
-        pump_messages(&engine, Duration::from_secs(25))?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !sender.is_finished() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if !sender.is_finished() {
-            return Err("The loopback sender thread did not finish.".to_string());
-        }
-        let _ = sender.join();
+            let sender = std::thread::Builder::new()
+                .name("loopback sender".to_string())
+                .spawn(sender_main)
+                .map_err(|error| format!("The loopback sender could not start. {error}"))?;
+            pump_messages(&engine, Duration::from_secs(25))?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !sender.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !sender.is_finished() {
+                return Err("The loopback sender thread did not finish.".to_string());
+            }
+            let _ = sender.join();
 
-        let log = LOG.lock().unwrap().clone();
-        assert(&log)
-    }));
+            let log = LOG.lock().unwrap().clone();
+            assert(&log)
+        }));
     let failure = match run_result {
         Ok(result) => result.err(),
         Err(payload) => Some(match payload.downcast::<String>() {
@@ -129,7 +171,11 @@ fn run_loopback(
 
     engine.stop();
     // SAFETY: FFI cleanup for the observer hook this thread installed.
-    let _ = unsafe { UnhookWindowsHookEx(HHOOK(OBSERVER_HOOK.swap(std::ptr::null_mut(), Ordering::SeqCst))) };
+    let _ = unsafe {
+        UnhookWindowsHookEx(HHOOK(
+            OBSERVER_HOOK.swap(std::ptr::null_mut(), Ordering::SeqCst),
+        ))
+    };
     release_all_modifiers();
     drop(engine);
 
@@ -187,6 +233,207 @@ fn disable_sender_main() {
     std::thread::sleep(Duration::from_millis(1500));
     record_async_state("post");
     std::thread::sleep(Duration::from_millis(200));
+}
+
+fn typing_sender_main() {
+    let _done = DoneOnDrop;
+    std::thread::sleep(Duration::from_millis(800));
+    let trigger = TYPING_TRIGGER_CODE;
+
+    // 1. Rollover typing: the chord key goes down while the trigger is still
+    //    down, but the trigger is released first.
+    log_line("MARK:rollover".to_string());
+    send_key(trigger, false);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(CHORD_CODE, false);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(trigger, true);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(CHORD_CODE, true);
+    std::thread::sleep(Duration::from_millis(400));
+    record_async_state("rollover");
+
+    // 2. A full press of the chord key inside the hold window.
+    log_line("MARK:chord".to_string());
+    send_key(trigger, false);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(CHORD_CODE, false);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(CHORD_CODE, true);
+    std::thread::sleep(Duration::from_millis(60));
+    record_async_state("chord-mid");
+    send_key(trigger, true);
+    std::thread::sleep(Duration::from_millis(400));
+    record_async_state("chord-post");
+
+    // 3. The chord key stays down past the hold timeout: the timer, not a
+    //    key event, resolves the hold.
+    log_line("MARK:timeout".to_string());
+    send_key(trigger, false);
+    std::thread::sleep(Duration::from_millis(40));
+    send_key(CHORD_CODE, false);
+    std::thread::sleep(Duration::from_millis(500));
+    record_async_state("timeout-mid");
+    send_key(CHORD_CODE, true);
+    std::thread::sleep(Duration::from_millis(60));
+    send_key(trigger, true);
+    std::thread::sleep(Duration::from_millis(400));
+    record_async_state("timeout-post");
+    log_line("MARK:end".to_string());
+}
+
+fn nothing_sender_main() {
+    let _done = DoneOnDrop;
+    std::thread::sleep(Duration::from_millis(800));
+
+    // A quick tap with TapBehavior::Nothing.
+    send_key(TRIGGER_CODE, false);
+    std::thread::sleep(Duration::from_millis(100));
+    send_key(TRIGGER_CODE, true);
+    std::thread::sleep(Duration::from_millis(300));
+    // A long lone hold, which is cancelled regardless of the tap behavior.
+    send_key(TRIGGER_CODE, false);
+    std::thread::sleep(Duration::from_millis(700));
+    send_key(TRIGGER_CODE, true);
+    std::thread::sleep(Duration::from_millis(400));
+    record_async_state("post");
+}
+
+/// The events between two `MARK:` lines, keeping only the trigger and chord
+/// keys (modifier events interleave and are checked separately).
+fn segment<'a>(log: &'a [String], from: &str, to: &str) -> &'a [String] {
+    let start = log
+        .iter()
+        .position(|line| line == &format!("MARK:{from}"))
+        .map_or(log.len(), |index| index + 1);
+    let end = log
+        .iter()
+        .position(|line| line == &format!("MARK:{to}"))
+        .unwrap_or(log.len());
+    &log[start..end.max(start)]
+}
+
+fn key_events(lines: &[String], codes: &[u16]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| {
+            codes.iter().any(|code| {
+                line.starts_with(&format!("EVT:DOWN:0x{code:02X}:"))
+                    || line.starts_with(&format!("EVT:UP:0x{code:02X}:"))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+fn assert_typing_log_sequence(log: &[String]) -> Result<(), String> {
+    let require = |condition: bool, message: &str| -> Result<(), String> {
+        if condition {
+            Ok(())
+        } else {
+            Err(format!("{message}\nObserved: {}", log.join(" | ")))
+        }
+    };
+    let tag = describe_tag(SYNTHETIC_INPUT_TAG as usize);
+    let trigger = TYPING_TRIGGER_CODE;
+    let keys = [trigger, CHORD_CODE];
+    let async_line = |phase: &str| {
+        log.iter()
+            .find(|line| line.starts_with(&format!("ASYNC-{phase}:")))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let held = |phase: &str| format!("ASYNC-{phase}:Ctrl=True:Alt=True:Shift=True");
+    let free = |phase: &str| format!("ASYNC-{phase}:Ctrl=False:Alt=False:Shift=False");
+
+    // 1. Rollover: trigger tap first, then the chord key without modifiers;
+    //    the chord key's physical key-up passes through.
+    let rollover = segment(log, "rollover", "chord");
+    require(
+        key_events(rollover, &keys)
+            == vec![
+                format!("EVT:DOWN:0x{trigger:02X}:{tag}"),
+                format!("EVT:UP:0x{trigger:02X}:{tag}"),
+                format!("EVT:DOWN:0x{CHORD_CODE:02X}:{tag}"),
+                format!("EVT:UP:0x{CHORD_CODE:02X}:R"),
+            ],
+        "Rollover must yield a trigger tap, then the chord key.",
+    )?;
+    require(
+        !rollover.iter().any(|line| line.starts_with("EVT:DOWN:0xA")),
+        "Rollover must not press any modifier.",
+    )?;
+    require(
+        async_line("rollover") == free("rollover"),
+        "No modifier may be held after rollover.",
+    )?;
+
+    // 2. Full press inside the hold: modifiers, then the replayed press.
+    let chord = segment(log, "chord", "timeout");
+    require(
+        key_events(chord, &keys)
+            == vec![
+                format!("EVT:DOWN:0x{CHORD_CODE:02X}:{tag}"),
+                format!("EVT:UP:0x{CHORD_CODE:02X}:{tag}"),
+            ],
+        "A full press inside the hold must be replayed as the chord, with no trigger tap.",
+    )?;
+    let first_modifier = chord
+        .iter()
+        .position(|line| line.starts_with("EVT:DOWN:0xA"));
+    let chord_down = chord
+        .iter()
+        .position(|line| line == &format!("EVT:DOWN:0x{CHORD_CODE:02X}:{tag}"));
+    require(
+        first_modifier.is_some() && first_modifier < chord_down,
+        "The output modifiers must go down before the replayed chord key.",
+    )?;
+    require(
+        async_line("chord-mid") == held("chord-mid"),
+        "Modifiers must be held mid-chord.",
+    )?;
+    require(
+        async_line("chord-post") == free("chord-post"),
+        "Modifiers must be released after the chord.",
+    )?;
+
+    // 3. Timeout: the timer replays the buffered down; the up passes through.
+    let timeout = segment(log, "timeout", "end");
+    require(
+        key_events(timeout, &keys)
+            == vec![
+                format!("EVT:DOWN:0x{CHORD_CODE:02X}:{tag}"),
+                format!("EVT:UP:0x{CHORD_CODE:02X}:R"),
+            ],
+        "The hold timeout must replay the buffered chord key under the layer.",
+    )?;
+    require(
+        async_line("timeout-mid") == held("timeout-mid"),
+        "Modifiers must be held after the hold timeout.",
+    )?;
+    require(
+        async_line("timeout-post") == free("timeout-post"),
+        "Modifiers must be released after the timed-out chord.",
+    )
+}
+
+fn assert_nothing_log_sequence(log: &[String]) -> Result<(), String> {
+    let require = |condition: bool, message: &str| -> Result<(), String> {
+        if condition {
+            Ok(())
+        } else {
+            Err(format!("{message}\nObserved: {}", log.join(" | ")))
+        }
+    };
+    require(
+        key_events(log, &[TRIGGER_CODE]).is_empty(),
+        "With TapBehavior::Nothing and a cancelled long hold, no trigger event may reach the observer.",
+    )?;
+    require(
+        log.iter()
+            .any(|line| line == "ASYNC-post:Ctrl=False:Alt=False:Shift=False"),
+        "No modifier may be held.",
+    )
 }
 
 fn record_async_state(phase: &str) {

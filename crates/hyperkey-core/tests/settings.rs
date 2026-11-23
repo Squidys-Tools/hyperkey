@@ -25,9 +25,9 @@ fn malformed_json_falls_back_to_defaults() {
 #[test]
 fn unsupported_schema_versions_fall_back_to_defaults() {
     let serialized = json::serialize(&HyperkeySettings::defaults());
-    for version in [0, 3, 99] {
+    for version in [0, 4, 99] {
         let result = json::parse(&serialized.replace(
-            "\"schemaVersion\": 2",
+            "\"schemaVersion\": 3",
             &format!("\"schemaVersion\": {version}"),
         ));
 
@@ -138,7 +138,7 @@ fn modifier_and_trigger_names_parse_case_insensitively() {
         ],
         result.settings.output_modifiers()
     );
-    assert_eq!(TapBehavior::CapsLock, result.settings.tap_behavior());
+    assert_eq!(TapBehavior::SendTrigger, result.settings.tap_behavior());
 }
 
 #[test]
@@ -161,22 +161,28 @@ fn missing_launch_to_tray_defaults_to_false_on_current_schema() {
 
 #[test]
 fn create_rejects_invalid_modifier_sets() {
-    assert!(HyperkeySettings::defaults()
-        .with_output_modifiers(Vec::new())
-        .is_err());
+    assert!(
+        HyperkeySettings::defaults()
+            .with_output_modifiers(Vec::new())
+            .is_err()
+    );
 
-    assert!(HyperkeySettings::defaults()
-        .with_output_modifiers(vec![
-            OutputModifier::Control,
-            OutputModifier::Alt,
-            OutputModifier::Shift,
-            OutputModifier::Control,
-        ])
-        .is_err());
+    assert!(
+        HyperkeySettings::defaults()
+            .with_output_modifiers(vec![
+                OutputModifier::Control,
+                OutputModifier::Alt,
+                OutputModifier::Shift,
+                OutputModifier::Control,
+            ])
+            .is_err()
+    );
 
-    assert!(HyperkeySettings::defaults()
-        .with_output_modifiers(vec![OutputModifier::Alt, OutputModifier::Alt])
-        .is_err());
+    assert!(
+        HyperkeySettings::defaults()
+            .with_output_modifiers(vec![OutputModifier::Alt, OutputModifier::Alt])
+            .is_err()
+    );
 }
 
 #[test]
@@ -187,16 +193,18 @@ fn create_rejects_unsupported_trigger_and_schema() {
         "Expected LWin to be rejected as a trigger."
     );
 
-    assert!(HyperkeySettings::create_with_schema_version(
-        true,
-        TriggerKey::CAPS_LOCK,
-        vec![OutputModifier::Control],
-        true,
-        false,
-        TapBehavior::CapsLock,
-        0,
-    )
-    .is_err());
+    assert!(
+        HyperkeySettings::create_with_schema_version(
+            true,
+            TriggerKey::CAPS_LOCK,
+            vec![OutputModifier::Control],
+            true,
+            false,
+            TapBehavior::SendTrigger,
+            0,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -325,10 +333,7 @@ fn null_modifier_entries_are_dropped_not_fatal() {
       "tapBehavior": "CapsLock"
     }"#;
 
-    let result = json::parse(&TEMPLATE.replace(
-        "MODIFIERS",
-        r#"["Control", null, "Alt", null]"#,
-    ));
+    let result = json::parse(&TEMPLATE.replace("MODIFIERS", r#"["Control", null, "Alt", null]"#));
     assert!(!result.used_defaults);
     assert!(!result.file_corrupt);
     assert!(result.repaired);
@@ -394,7 +399,10 @@ fn unknown_fields_are_ignored() {
     assert!(!result.settings.enabled());
     assert_eq!(&[OutputModifier::Shift], result.settings.output_modifiers());
     assert!(result.settings.launch_to_tray());
-    assert_eq!(TriggerKey::try_parse("F9").unwrap(), result.settings.trigger());
+    assert_eq!(
+        TriggerKey::try_parse("F9").unwrap(),
+        result.settings.trigger()
+    );
 }
 
 #[test]
